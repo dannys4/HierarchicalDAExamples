@@ -32,6 +32,9 @@ end
 # ╔═╡ c7ae48f6-b72b-4103-853f-9e4052dc28ff
 using HierarchicalDA, LinearMaps, TransportBasedInference2, Distributions, SparseArrays
 
+# ╔═╡ 67b1362b-a400-4550-8c91-442acac4ba16
+using StaticArrays
+
 # ╔═╡ 34c27970-71f0-4fe3-9ff3-7c3cdff7b434
 begin
 	function initial_condition_sawtooth_fcn(x, t;
@@ -112,6 +115,7 @@ begin
 		    end
 		end
 	elseif mesh isa DGMultiMesh
+		# Get quadrature points
 		mesh_x = mesh.md.xq
 	else
 		throw(ArgumentError("Unknown mesh type $(typeof(mesh))"))
@@ -151,23 +155,26 @@ size(PA.P), size(xgrid), (Ns, Nx)
 
 # ╔═╡ b4d79689-309b-44ca-b783-6070e8b364ea
 begin
-	Δ = 20
+	Δ = 40
 	Ny = ceil(Int64, Nx/Δ)
 	Δtdyn = 0.01
-	Δtobs = 0.01
+	Δtobs = 0.05
 	t0 = 0.0
 	Tf = 100
 	Tspin = 1000
 	tf = t0 + Tf*Δtobs
 	π0 = MvNormal(zeros(Nx), Matrix(1.0*I, Nx, Nx))
-	σx_true = 0.001
+	σx_true = 0.005
 	σx = 0.01
-	σy = 0.2
+	σy = 0.05
 	
 	ϵx_true = AdditiveInflation(Nx, zeros(Nx), σx_true)
 	ϵx = AdditiveInflation(Nx, zeros(Nx), σx)
 	ϵy = AdditiveInflation(Ny, zeros(Ny), σy)
 end
+
+# ╔═╡ 946ab4ed-d3be-4ac9-8f6f-deeff7e368a5
+σy
 
 # ╔═╡ fa3b9910-b166-4651-8103-e27d22b4aab9
 begin
@@ -183,8 +190,37 @@ begin
 	data = generate_data_trixi(model, u0, Tf, sys_advection)
 end
 
-# ╔═╡ 9d041faa-a058-4552-842d-7305e114e343
+# ╔═╡ 04070ff2-9b7f-4ac7-9a05-3a5d2a12a8b5
+# begin
+# 	x_ode = Trixi.allocate_coefficients(Trixi.mesh_equations_solver_cache(sys_advection.semi)...)
+# 	for idx in eachindex(x_ode)
+# 		x_ode[idx] = @SVector[1.]
+# 	end
+# 	C = x_ode
+# 	A = basis.Pq
+# 	B = x_ode
+# 	α, β = true, false
+# 	# LinearAlgebra.generic_matmatmul!(
+#  #        C,
+#  #        LinearAlgebra.wrapper_char(A),
+#  #        LinearAlgebra.wrapper_char(B),
+#  #        LinearAlgebra._unwrap(A),
+# 	# 	LinearAlgebra._unwrap(B),
+#  #        LinearAlgebra.MulAddMul(α, β)
+#  #    )
+# 	@which mul!(C, A, B)
+# end
 
+# ╔═╡ 9d041faa-a058-4552-842d-7305e114e343
+begin
+	lines(xgrid, reduce(vcat, vec(ode.u0)))
+	lines!(xgrid, u0, linestyle=:dash)
+	scatter!(xgrid, data.xt[:,end÷2])
+	Makie.current_figure()
+end
+
+# ╔═╡ 1e253c95-fad3-4510-b2fc-96f63612208b
+sys_advection.dg.basis.Pq
 
 # ╔═╡ Cell order:
 # ╠═633dd2fa-2388-4b10-8aea-83754fba1e99
@@ -203,6 +239,10 @@ end
 # ╠═8e466589-9814-4ed6-906e-500197474a92
 # ╠═14885cc2-2a74-4b95-a112-fddef6ac240a
 # ╠═b4d79689-309b-44ca-b783-6070e8b364ea
+# ╠═946ab4ed-d3be-4ac9-8f6f-deeff7e368a5
 # ╠═fa3b9910-b166-4651-8103-e27d22b4aab9
 # ╠═2bf04647-61ce-4e04-aa5b-6d51128847a6
+# ╠═67b1362b-a400-4550-8c91-442acac4ba16
+# ╠═04070ff2-9b7f-4ac7-9a05-3a5d2a12a8b5
 # ╠═9d041faa-a058-4552-842d-7305e114e343
+# ╠═1e253c95-fad3-4510-b2fc-96f63612208b
