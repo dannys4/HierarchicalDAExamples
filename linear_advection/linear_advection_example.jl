@@ -23,7 +23,6 @@ using Trixi
 using LinearAlgebra
 using OrdinaryDiffEq
 using CairoMakie
-using ProgressLogging
 using HierarchicalDA
 using StaticArrays
 using LinearMaps
@@ -44,6 +43,7 @@ function initial_condition_sawtooth(x, t, _::LinearScalarAdvectionEquation1D)
     SVector(initial_condition_sawtooth_fcn(x, t))
 end
 
+# + jupyter={"source_hidden": true}
 with_theme(my_theme) do
 	fig = Figure()
 	ax = Axis(fig[1,1], title="Initial condition", ylabel=L"u(0,x)", xlabel=L"x")
@@ -52,7 +52,6 @@ with_theme(my_theme) do
 end
 
 # +
-@info "hello"
 polydeg = 8
 advection_velocity = 0.1
 equations = LinearScalarAdvectionEquation1D(advection_velocity)
@@ -147,9 +146,9 @@ Tf = 20
 Tspin = 1000
 tf = t0 + Tf*Δtobs
 π0 = MvNormal(zeros(Nx), Matrix(1.0*I, Nx, Nx))
-σx_true = 0.005
-σx = 0.01
-σy = 0.05
+σx_true = 0.05
+σx = 0.05
+σy = 0.1
 
 ϵx_true = AdditiveInflation(Nx, zeros(Nx), σx_true)
 ϵx = AdditiveInflation(Nx, zeros(Nx), σx)
@@ -164,6 +163,7 @@ model = Model(Nx, Ny, Δtdyn, Δtobs, ϵx_true, ϵy, π0, 0, 0, 0, F)
 u0 = initial_condition_sawtooth_fcn.(xgrid, (0,))
 data = generate_data_trixi(model, u0, Tf, sys_advection)
 
+# + jupyter={"source_hidden": true}
 with_theme(my_theme) do
 	fig = Figure()
 	ax = Axis(fig[1,1], xlabel=L"x", title="Generated data")
@@ -191,6 +191,7 @@ for i=1:Ne
 end
 # -
 
+# + jupyter={"source_hidden": true}
 with_theme(my_theme) do
 	fig = Figure()
 	
@@ -244,29 +245,28 @@ sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX)
 
 hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, deepcopy(θinit), Δtdyn, Δtobs)
 
-X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection)
+X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
-enkf = EnKF()
-
+# + jupyter={"source_hidden": true}
 with_theme(my_theme) do
 	t_start = 3
 	tsnap = Observable(t_start)
 	
 	x_tsnap = @lift(data.xt[:,$tsnap])
 	y_tsnap = @lift(data.yt[:,$tsnap])
-	X_locenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims = 2)))
+	X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims = 2)))
 	X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:,j]) for j in 1:Ne]
 	
 	fig = Figure()
 	
-	ax1 = Axis(fig[1,1])
+	ax1 = Axis(fig[1,1], title="Hierarchical Localized EnKF")
 	
-	lines!(ax1, xgrid, x_tsnap, linewidth = 3, label = "Truth")
-	lines!(ax1, xgrid, X_locenkf_tsnap, linewidth = 3, label = "LocEnKF")
+	scatter!(ax1, xgrid, x_tsnap, label = "Truth")
+	lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth = 3, label = "HLocEnKF")
 	for j in 1:Ne
 		lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9)
 	end
-	scatter!(ax1, xgrid[1:Δ:end], y_tsnap)
+	# scatter!(ax1, xgrid[1:Δ:end], y_tsnap)
 	
 	axislegend(ax1)
 	
@@ -277,10 +277,11 @@ with_theme(my_theme) do
 	anim = CairoMakie.Makie.Record(fig, timestamps; framerate = framerate) do t
 	    tsnap[] = t
 	end
-	save("assim.gif", anim)
+	save("assim_hlenkf.gif", anim)
 	anim
 end
 
+# + jupyter={"source_hidden": true}
 with_theme(my_theme) do
 	tsnap = Observable(1)
 	
@@ -306,6 +307,45 @@ with_theme(my_theme) do
 	    tsnap[] = t
 	end
 	save("assim_theta.gif", anim)
+	anim
+end
+
+sys_y = ObsSystem(H, Cϵ, CX)
+enkf = EnKF(Ne, ϵy, sys_y, Δtdyn, Δtobs)
+
+X_enkf = seqassim_trixi(data, Tf, ϵxβ, enkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+
+# + jupyter={"source_hidden": true}
+with_theme(my_theme) do
+	t_start = 3
+	tsnap = Observable(t_start)
+	
+	x_tsnap = @lift(data.xt[:,$tsnap])
+	y_tsnap = @lift(data.yt[:,$tsnap])
+	X_enkf_tsnap = @lift(vec(mean(X_enkf[$tsnap+1]; dims = 2)))
+	X_ens_tsnap = [@lift(X_enkf[$tsnap+1][:,j]) for j in 1:Ne]
+	
+	fig = Figure()
+	
+	ax1 = Axis(fig[1,1], title="Unadjusted EnKF")
+	
+	lines!(ax1, xgrid, x_tsnap, linewidth = 3, label = "Truth")
+	# lines!(ax1, xgrid, X_enkf_tsnap, linewidth = 3, label = "EnKF")
+	for j in 1:2
+		lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9)
+	end
+	scatter!(ax1, xgrid[1:Δ:end], y_tsnap)
+	
+	axislegend(ax1)
+	
+	
+	framerate = 10
+	timestamps = range(t_start, Tf, step = 1)
+	
+	anim = CairoMakie.Makie.Record(fig, timestamps; framerate = framerate) do t
+	    tsnap[] = t
+	end
+	save("assim_enkf.gif", anim)
 	anim
 end
 
