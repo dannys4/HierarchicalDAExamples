@@ -128,7 +128,7 @@ with_theme(my_theme) do
 	anim
 end
 
-order_PA = 3
+order_PA = 2
 Nx = length(xgrid)
 Ns = Nx - 2ceil(Int, order_PA/2)
 PA = PolyAnnil(xgrid, order_PA; istruncated = true)
@@ -146,8 +146,8 @@ Tf = 20
 Tspin = 1000
 tf = t0 + Tf*Δtobs
 π0 = MvNormal(zeros(Nx), Matrix(1.0*I, Nx, Nx))
-σx_true = 0.05
 σx = 0.05
+σx_hlocenkf = 0.5
 σy = 0.1
 
 ϵx_true = AdditiveInflation(Nx, zeros(Nx), σx_true)
@@ -189,7 +189,6 @@ for i=1:Ne
     regenerate!(f0)
     X0[Ny+1:Ny+Nx,i] = exp.(f0.(xgrid)/2) .- 0.5#initial_condition(αk, Δx, Nx)
 end
-# -
 
 # + jupyter={"source_hidden": true}
 with_theme(my_theme) do
@@ -247,7 +246,6 @@ hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, deepcopy(θinit), Δtdyn, Δtobs
 
 X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
-# + jupyter={"source_hidden": true}
 with_theme(my_theme) do
 	t_start = 3
 	tsnap = Observable(t_start)
@@ -263,9 +261,9 @@ with_theme(my_theme) do
 	
 	scatter!(ax1, xgrid, x_tsnap, label = "Truth")
 	lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth = 3, label = "HLocEnKF")
-	for j in 1:Ne
-		lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9)
-	end
+	# for j in 1:Ne
+	# 	lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9)
+	# end
 	# scatter!(ax1, xgrid[1:Δ:end], y_tsnap)
 	
 	axislegend(ax1)
@@ -314,8 +312,8 @@ sys_y = ObsSystem(H, Cϵ, CX)
 enkf = EnKF(Ne, ϵy, sys_y, Δtdyn, Δtobs)
 
 X_enkf = seqassim_trixi(data, Tf, ϵxβ, enkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+# -
 
-# + jupyter={"source_hidden": true}
 with_theme(my_theme) do
 	t_start = 3
 	tsnap = Observable(t_start)
@@ -330,10 +328,10 @@ with_theme(my_theme) do
 	ax1 = Axis(fig[1,1], title="Unadjusted EnKF")
 	
 	lines!(ax1, xgrid, x_tsnap, linewidth = 3, label = "Truth")
-	# lines!(ax1, xgrid, X_enkf_tsnap, linewidth = 3, label = "EnKF")
-	for j in 1:2
-		lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9)
-	end
+	lines!(ax1, xgrid, X_enkf_tsnap, linewidth = 3, label = "EnKF")
+	# for j in 1:Ne
+	# 	lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9)
+	# end
 	scatter!(ax1, xgrid[1:Δ:end], y_tsnap)
 	
 	axislegend(ax1)
