@@ -3,3 +3,4 @@ Manifest.toml
 *.gif
 *.ipynb
 **/.ipynb_checkpoints
+*.mp4

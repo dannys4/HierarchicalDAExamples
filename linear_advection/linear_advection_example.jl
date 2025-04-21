@@ -134,7 +134,8 @@ Ns = Nx - 2ceil(Int, order_PA/2)
 PA = PolyAnnil(xgrid, order_PA; istruncated = true)
 sys_advection = TrixiSystem(equations, solver, mesh, semi)
 S = LinearMaps.FunctionMap{Float64,true}((s,x)->mul!(s, PA.P, x), (x,s)->mul!(x, PA.P', s), Ns, Nx; issymmetric=false, isposdef=false)
-xgrid_S = xgrid[ceil(Int, order_PA/2)+1:end-ceil(Int, order_PA/2)];
+PA_offset = ceil(Int, order_PA/2)
+xgrid_S = xgrid[PA_offset+1:end-PA_offset];
 
 # +
 Δ = 40
