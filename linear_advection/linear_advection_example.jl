@@ -7,9 +7,9 @@
 #       extension: .jl
 #       format_name: light
 #       format_version: '1.5'
-#       jupytext_version: 1.16.1
+#       jupytext_version: 1.16.7
 #   kernelspec:
-#     display_name: Julia 1.11.3
+#     display_name: Julia 1.11.5
 #     language: julia
 #     name: julia-1.11
 # ---
@@ -43,7 +43,6 @@ function initial_condition_sawtooth(x, t, _::LinearScalarAdvectionEquation1D)
     SVector(initial_condition_sawtooth_fcn(x, t))
 end
 
-# + jupyter={"source_hidden": true}
 with_theme(my_theme) do
 	fig = Figure()
 	ax = Axis(fig[1,1], title="Initial condition", ylabel=L"u(0,x)", xlabel=L"x")
@@ -128,18 +127,9 @@ with_theme(my_theme) do
 	anim
 end
 
-order_PA = 2
+Δy = 50
 Nx = length(xgrid)
-Ns = Nx - 2ceil(Int, order_PA/2)
-PA = PolyAnnil(xgrid, order_PA; istruncated = true)
-sys_advection = TrixiSystem(equations, solver, mesh, semi)
-S = LinearMaps.FunctionMap{Float64,true}((s,x)->mul!(s, PA.P, x), (x,s)->mul!(x, PA.P', s), Ns, Nx; issymmetric=false, isposdef=false)
-PA_offset = ceil(Int, order_PA/2)
-xgrid_S = xgrid[PA_offset+1:end-PA_offset];
-
-# +
-Δ = 40
-Ny = ceil(Int64, Nx/Δ)
+Ny = ceil(Int64, Nx/Δy)
 Δtdyn = 0.05
 Δtobs = 0.25
 t0 = 0.0
@@ -147,18 +137,15 @@ Tf = 20
 Tspin = 1000
 tf = t0 + Tf*Δtobs
 π0 = MvNormal(zeros(Nx), Matrix(1.0*I, Nx, Nx))
-σx = 0.05
-σx_hlocenkf = 0.5
+σx_true = 0.05
 σy = 0.1
 
-ϵx_true = AdditiveInflation(Nx, zeros(Nx), σx_true)
-ϵx = AdditiveInflation(Nx, zeros(Nx), σx)
-ϵy = AdditiveInflation(Ny, zeros(Ny), σy)
-# -
-
-h(x, t) = x[1:Δ:end]
-H = LinearMap(sparse(Matrix(1.0*I, Nx, Nx)[1:Δ:end,:]))
+h(x, t) = x[1:Δy:end]
+H = LinearMap(sparse(Matrix(1.0*I, Nx, Nx)[1:Δy:end,:]))
 F = StateSpace(x->x, h)
+sys_advection = TrixiSystem(equations, solver, mesh, semi)
+ϵx_true = AdditiveInflation(Nx, zeros(Nx), σx_true)
+ϵy = AdditiveInflation(Ny, zeros(Ny), σy)
 model = Model(Nx, Ny, Δtdyn, Δtobs, ϵx_true, ϵy, π0, 0, 0, 0, F)
 
 u0 = initial_condition_sawtooth_fcn.(xgrid, (0,))
@@ -206,6 +193,15 @@ with_theme(my_theme) do
 	axislegend()
 	fig
 end
+# -
+
+order_PA = 3
+Nx = length(xgrid)
+PA_offset = ceil(Int, order_PA/2)
+Ns = Nx - 2PA_offset
+PA = PolyAnnil(xgrid, order_PA; istruncated = true)
+S = LinearMaps.FunctionMap{Float64,true}((s,x)->mul!(s, PA.P, x), (x,s)->mul!(x, PA.P', s), Ns, Nx; issymmetric=false, isposdef=false)
+xgrid_S = xgrid[PA_offset+1:end-PA_offset];
 
 # +
 idx = 4
@@ -224,7 +220,7 @@ r = r_range[idx] # select parameter
 dist = GeneralizedGamma(r, β_dist, ϑ);
 
 # +
-yidx = 1:Δ:Nx
+yidx = 1:Δy:Nx
 
 # # Create Localization structure
 Gxx(i,j) = periodicmetric!(i,j, Nx)
@@ -233,39 +229,48 @@ Gyy(i,j) = periodicmetric!(yidx[i],yidx[j], Nx)
 
 Lrad = 7
 Loc = Localization(Lrad, Gxx, Gxy, Gxx)
-β_infl = 1.01
-ϵxβ = MultiAddInflation(Nx, β_infl, zeros(Nx), σx)
+β_infl = 1.02
+σx_enkf = σx_true
+ϵxβ_enkf = MultiAddInflation(Nx, β_infl, zeros(Nx), σx_enkf)
 # -
 
 Cθ = LinearMap(Diagonal(rand(dist, Ns)))
 Cϵ = LinearMap(ϵy.Σ)
-CX = LinearMap(Diagonal(1.0 .+ rand(Nx)))
+# This CX is replaced with the estimated state cov at each step
+CX = LinearMap(I(Nx))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX)
 θinit = rand(dist, Ns);
 
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, deepcopy(θinit), Δtdyn, Δtobs)
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, deepcopy(θinit), Δtdyn, Δtobs, Niter=40, θinit = 1.)
 
-X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+
+[maximum(abs.(t)) for t in θhist]
 
 with_theme(my_theme) do
-	t_start = 3
+	t_start = 4
 	tsnap = Observable(t_start)
-	
 	x_tsnap = @lift(data.xt[:,$tsnap])
 	y_tsnap = @lift(data.yt[:,$tsnap])
+    ut = t->map(x->x[], vec(sol(t)))
+	ys = @lift(ut(($tsnap)*Δtobs))
 	X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims = 2)))
 	X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:,j]) for j in 1:Ne]
+    theta_tsnap = @lift(θhist[$tsnap+1])
+    cols = Makie.wong_colors()
 	
 	fig = Figure()
 	
 	ax1 = Axis(fig[1,1], title="Hierarchical Localized EnKF")
 	
-	scatter!(ax1, xgrid, x_tsnap, label = "Truth")
+	# scatter!(ax1, xgrid, x_tsnap, label = "Truth")
 	lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth = 3, label = "HLocEnKF")
-	# for j in 1:Ne
-	# 	lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9)
-	# end
-	# scatter!(ax1, xgrid[1:Δ:end], y_tsnap)
+	lines!(ax1, xgrid, ys, linewidth = 3, label = "State")
+	lines!(ax1, xgrid[PA_offset+1:end-PA_offset], theta_tsnap, linewidth = 3, label = "θ")
+	for j in 1:Ne
+		lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=( cols[1+(j % length(cols))], 0.2))
+	end
+	scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
 	
 	axislegend(ax1)
 	
@@ -280,60 +285,33 @@ with_theme(my_theme) do
 	anim
 end
 
-# + jupyter={"source_hidden": true}
-with_theme(my_theme) do
-	tsnap = Observable(1)
-	
-	y_tsnap = @lift(data.yt[:,$tsnap])
-	X_locenkf_tsnap = @lift(mean(X_hlocenkf[$tsnap+1]; dims = 2)[:,1])
-	θ_tsnap = @lift(θhist[$tsnap])
-	
-	
-	fig = Figure()
-	
-	ax1 = Axis(fig[1,1])
-	ylims!(ax1, (0.,1e-4))
-	
-	lines!(ax1, xgrid[3:end-2], θ_tsnap, linewidth = 3, label = L"\theta")
-	
-	axislegend(ax1)
-	
-	
-	framerate = 10
-	timestamps = range(1, Tf, step = 1)
-	
-	anim = CairoMakie.Makie.Record(fig, timestamps; framerate = framerate) do t
-	    tsnap[] = t
-	end
-	save("assim_theta.gif", anim)
-	anim
-end
-
+# +
 sys_y = ObsSystem(H, Cϵ, CX)
-enkf = EnKF(Ne, ϵy, sys_y, Δtdyn, Δtobs)
+Lenkf = LocEnKF(Ne, ϵy, sys_y, Loc, Δtdyn, Δtobs)
 
-X_enkf = seqassim_trixi(data, Tf, ϵxβ, enkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+X_Lenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, Lenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 # -
 
 with_theme(my_theme) do
 	t_start = 3
 	tsnap = Observable(t_start)
+    cols = Makie.wong_colors()
 	
 	x_tsnap = @lift(data.xt[:,$tsnap])
 	y_tsnap = @lift(data.yt[:,$tsnap])
-	X_enkf_tsnap = @lift(vec(mean(X_enkf[$tsnap+1]; dims = 2)))
-	X_ens_tsnap = [@lift(X_enkf[$tsnap+1][:,j]) for j in 1:Ne]
+	X_Lenkf_tsnap = @lift(vec(mean(X_Lenkf[$tsnap+1]; dims = 2)))
+	X_Lens_tsnap = [@lift(X_Lenkf[$tsnap+1][:,j]) for j in 1:Ne]
 	
 	fig = Figure()
 	
 	ax1 = Axis(fig[1,1], title="Unadjusted EnKF")
 	
 	lines!(ax1, xgrid, x_tsnap, linewidth = 3, label = "Truth")
-	lines!(ax1, xgrid, X_enkf_tsnap, linewidth = 3, label = "EnKF")
-	# for j in 1:Ne
-	# 	lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9)
-	# end
-	scatter!(ax1, xgrid[1:Δ:end], y_tsnap)
+	lines!(ax1, xgrid, X_Lenkf_tsnap, linewidth = 3, label = "EnKF")
+	for j in 1:Ne
+		lines!(ax1, xgrid, X_Lens_tsnap[j], linewidth=0.9, color=( cols[1+(j % length(cols))], 0.2))
+	end
+	scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
 	
 	axislegend(ax1)
 	
