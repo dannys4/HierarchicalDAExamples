@@ -4,3 +4,4 @@ Manifest.toml
 *.ipynb
 **/.ipynb_checkpoints
 *.mp4
+**/.virtual_documents
