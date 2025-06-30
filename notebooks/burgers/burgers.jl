@@ -253,7 +253,7 @@ with_theme(my_theme) do
     anim = Makie.Record(fig, timestamps; framerate=framerate) do t
         tsnap[] = t
     end
-    save("assim_hlenkf.gif", anim)
+    save("figs/assim_hlenkf.mp4", anim)
     anim
 end
 
@@ -290,7 +290,7 @@ with_theme(my_theme) do
     anim = Makie.Record(fig, timestamps; framerate=framerate) do t
         tsnap[] = t
     end
-    save("assim_lenkf.gif", anim)
+    save("figs/assim_lenkf.mp4", anim)
     anim
 end
 
@@ -321,7 +321,7 @@ ax3 = Axis(fig[1, 3],
     ylabel=L"x",)
 h3 = heatmap!(ax3, data.tt, xgrid, mean_hist(X_hlocenkf)[:, 2:end]')
 
-save("heatmap_inviscid_burgers.pdf", fig)
+save("figs/heatmap_inviscid_burgers.png", fig)
 
 fig
 
