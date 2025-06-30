@@ -16,7 +16,7 @@
 
 # %%
 using Pkg
-Pkg.activate("..")
+Pkg.activate("../..")
 
 # %%
 using Revise
@@ -39,9 +39,9 @@ my_theme = Theme()
 polydeg = 3
 Ncells = 100
 
-Nx = (polydeg+1)*Ncells
+Nx = (polydeg + 1) * Ncells
 Δy = 20
-Ny = ceil(Int64, Nx/Δy)
+Ny = ceil(Int64, Nx / Δy)
 
 # Define Trixi system for inviscid Burgers equation
 sys_burgers = setup_burgers(polydeg, Ncells);
@@ -51,14 +51,14 @@ xgrid = vec(sys_burgers.mesh.md.xq);
 # %%
 order_PA = 3
 
-PA_offset = ceil(Int64, order_PA/2)
-Ns = Nx - 2*PA_offset
+PA_offset = ceil(Int64, order_PA / 2)
+Ns = Nx - 2 * PA_offset
 
-PA = PolyAnnil(xgrid, order_PA; istruncated = true)
+PA = PolyAnnil(xgrid, order_PA; istruncated=true)
 @assert size(PA.P) == (Ns, Nx)
 
-S = LinearMaps.FunctionMap{Float64,true}((s,x)->mul!(s, PA.P, x), (x,s)->mul!(x, PA.P', s),
-Ns, Nx; issymmetric=false, isposdef=false)
+S = LinearMaps.FunctionMap{Float64,true}((s, x) -> mul!(s, PA.P, x), (x, s) -> mul!(x, PA.P', s),
+    Ns, Nx; issymmetric=false, isposdef=false)
 
 xs = xgrid[PA_offset+1:end-PA_offset];
 
@@ -70,10 +70,10 @@ xs = xgrid[PA_offset+1:end-PA_offset];
 t0 = 0.0
 Tf = 200
 Tspin = 100
-tf = t0 + Tf*Δtobs
+tf = t0 + Tf * Δtobs
 
 # %%
-π0 = MvNormal(zeros(Nx), Matrix(1.0*I, Nx, Nx))
+π0 = MvNormal(zeros(Nx), Matrix(1.0 * I, Nx, Nx))
 
 # %%
 σx_data = 0.0#Δtobs*1.0
@@ -89,14 +89,14 @@ tf = t0 + Tf*Δtobs
 
 # %%
 h(x, t) = x[1:Δy:end]
-H = LinearMap(sparse(Matrix(1.0*I, Nx, Nx)[1:Δy:end,:]))
-F = StateSpace(x->x, h)
+H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[1:Δy:end, :]))
+F = StateSpace(x -> x, h)
 
 # %%
 model = Model(Nx, Ny, Δtdyn, Δtobs, ϵx_data, ϵy, π0, 0, 0, 0, F);
 
 # %%
-x0 = vec(1/2 .+ 0.5*sin.(3*π*sys_burgers.mesh.md.xq));
+x0 = vec(1 / 2 .+ 0.5 * sin.(3 * π * sys_burgers.mesh.md.xq));
 
 # %%
 lines(xgrid, x0)
@@ -105,25 +105,25 @@ lines(xgrid, x0)
 @time data = generate_data_trixi(model, x0, Tf, sys_burgers)
 
 # %%
-heatmap( Δtobs*(1:Tf), xgrid, data.xt', axis=(;xlabel=L"t",ylabel=L"x",title=L"Solution of inviscid burgers, $u(x,t)$"))
+heatmap(Δtobs * (1:Tf), xgrid, data.xt', axis=(; xlabel=L"t", ylabel=L"x", title=L"Solution of inviscid burgers, $u(x,t)$"))
 
 # %%
 fig = Figure()
-ax = Axis(fig[1,1])
+ax = Axis(fig[1, 1])
 
-lines!(ax, xgrid, data.xt[:,1])
-lines!(ax, xgrid, data.xt[:,100])
-scatter!(ax, xgrid[1:Δy:end], data.yt[:,100])
+lines!(ax, xgrid, data.xt[:, 1])
+lines!(ax, xgrid, data.xt[:, 100])
+scatter!(ax, xgrid[1:Δy:end], data.yt[:, 100])
 
 fig
 
 # %%
 fig = Figure()
 PA_t_idx = 100
-ax = Axis(fig[1,1], title=L"Polynomial annhilator, $\mathbf{S}u(x,%$(Δtobs*PA_t_idx) )$")
+ax = Axis(fig[1, 1], title=L"Polynomial annhilator, $\mathbf{S}u(x,%$(Δtobs*PA_t_idx) )$")
 
 # lines!(ax, xgrid, data.xt[:,1])
-lines!(ax, xs, PA*data.xt[:,PA_t_idx])
+lines!(ax, xs, PA * data.xt[:, PA_t_idx])
 
 fig
 
@@ -132,13 +132,13 @@ idx = 4
 
 ## Selecion of hyper-prior parameters
 # power parameter
-r_range = [ 1.0, .5, -.5, -1.0 ]; 
+r_range = [1.0, 0.5, -0.5, -1.0];
 r = r_range[idx] # select parameter 
 # shape parameter
-β_range = [ 1.501, 3.0918, 2.0165, 1.0017 ]; 
+β_range = [1.501, 3.0918, 2.0165, 1.0017];
 β = β_range[idx] # shape parameter
 # rate parameters 
-ϑ_range = [ 5*10^(-2), 5.9323*10^(-3), 1.2583*10^(-3), 1.2308*10^(-4) ]; 
+ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ = ϑ_range[idx]
 
 dist = GeneralizedGamma(r, β, ϑ);
@@ -149,26 +149,26 @@ lines(rand(dist, Ns))
 # %%
 # Define function class for the initial condition
 αk = 0.7
-f0 = SmoothPeriodic(xgrid, αk; L = 1.0);
+f0 = SmoothPeriodic(xgrid, αk; L=1.0);
 Ne = 50
 X = zeros(model.Ny + model.Nx, Ne)
 
-for i=1:Ne
+for i = 1:Ne
     regenerate!(f0)
-    X[Ny+1:Ny+Nx,i] = f0.(xgrid)/4 .+ 0.5#initial_condition(αk, Δx, Nx)
+    X[Ny+1:Ny+Nx, i] = f0.(xgrid) / 4 .+ 0.5#initial_condition(αk, Δx, Nx)
 end
 
 # %%
 fig = Figure()
 
-ax = Axis(fig[1,1])
+ax = Axis(fig[1, 1])
 
-for i=1:10
-    lines!(ax, xgrid, X[Ny+1:Ny+Nx,i])
+for i = 1:10
+    lines!(ax, xgrid, X[Ny+1:Ny+Nx, i])
 end
-lines!(xgrid, mean(X[Ny+1:Ny+Nx,:]; dims = 2)[:,1], linewidth = 5, linestyle = :dash)
+lines!(xgrid, mean(X[Ny+1:Ny+Nx, :]; dims=2)[:, 1], linewidth=5, linestyle=:dash)
 
-lines!(ax, xgrid, x0, linewidth = 3)
+lines!(ax, xgrid, x0, linewidth=3)
 
 fig
 
@@ -189,9 +189,9 @@ yidx = 1:Δy:Nx
 idx = vcat(collect(1:length(yidx))', collect(yidx)')
 
 # Create Localization structure
-Gxx(i,j) = periodicmetric!(i,j, Nx)
-Gxy(i,j) = periodicmetric!(i,yidx[j], Nx)
-Gyy(i,j) = periodicmetric!(yidx[i],yidx[j], Nx)
+Gxx(i, j) = periodicmetric!(i, j, Nx)
+Gxy(i, j) = periodicmetric!(i, yidx[j], Nx)
+Gyy(i, j) = periodicmetric!(yidx[i], yidx[j], Nx)
 
 Lrad = 10
 Loc = Localization(Lrad, Gxx, Gxy, Gxx)
@@ -220,106 +220,106 @@ X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxβ_filter, hlocenkf, deepc
 
 # %%
 with_theme(my_theme) do
-	t_start = 1
-	tsnap = Observable(t_start)
-	x_tsnap = @lift(data.xt[:,$tsnap])
-	y_tsnap = @lift(data.yt[:,$tsnap])
-    ut = t->map(x->x[], vec(data.xt[:,round(Int,t/Δtobs)]))
-	ys = @lift(ut(($tsnap)*Δtobs))
-	X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims = 2)))
-	X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:,j]) for j in 1:Ne]
+    t_start = 1
+    tsnap = Observable(t_start)
+    x_tsnap = @lift(data.xt[:, $tsnap])
+    y_tsnap = @lift(data.yt[:, $tsnap])
+    ut = t -> map(x -> x[], vec(data.xt[:, round(Int, t / Δtobs)]))
+    ys = @lift(ut(($tsnap) * Δtobs))
+    X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
+    X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
     theta_tsnap = @lift(θ_hlocenkf[$tsnap+1])
     cols = Makie.wong_colors()
-	
-	fig = Figure()
-	
-	ax1 = Axis(fig[1,1], title="Hierarchical Localized EnKF")
-	
-	# scatter!(ax1, xgrid, x_tsnap, label = "Truth")
-	lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth = 3, label = "HLocEnKF")
-	lines!(ax1, xgrid, ys, linewidth = 3, label = "State")
-	lines!(ax1, xgrid[PA_offset+1:end-PA_offset], theta_tsnap, linewidth = 3, label = "θ")
-	for j in 1:Ne
-		lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=( cols[1+(j % length(cols))], 0.2))
-	end
-	scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
-	
-	axislegend(ax1)
-	
-	
-	framerate = 10
-	timestamps = range(t_start, Tf, step = 1)
-	
-	anim = Makie.Record(fig, timestamps; framerate = framerate) do t
-	    tsnap[] = t
-	end
-	save("assim_hlenkf.gif", anim)
-	anim
+
+    fig = Figure()
+
+    ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
+
+    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
+    lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
+    lines!(ax1, xgrid, ys, linewidth=3, label="State")
+    lines!(ax1, xgrid[PA_offset+1:end-PA_offset], theta_tsnap, linewidth=3, label="θ")
+    for j in 1:Ne
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+    end
+    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
+
+    axislegend(ax1)
+
+
+    framerate = 10
+    timestamps = range(t_start, Tf, step=1)
+
+    anim = Makie.Record(fig, timestamps; framerate=framerate) do t
+        tsnap[] = t
+    end
+    save("assim_hlenkf.gif", anim)
+    anim
 end
 
 # %%
 with_theme(my_theme) do
-	t_start = 1
-	tsnap = Observable(t_start)
-	x_tsnap = @lift(data.xt[:,$tsnap])
-	y_tsnap = @lift(data.yt[:,$tsnap])
-    ut = t->map(x->x[], vec(data.xt[:,round(Int,t/Δtobs)]))
-	ys = @lift(ut(($tsnap)*Δtobs))
-	X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims = 2)))
-	X_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:,j]) for j in 1:Ne]
+    t_start = 1
+    tsnap = Observable(t_start)
+    x_tsnap = @lift(data.xt[:, $tsnap])
+    y_tsnap = @lift(data.yt[:, $tsnap])
+    ut = t -> map(x -> x[], vec(data.xt[:, round(Int, t / Δtobs)]))
+    ys = @lift(ut(($tsnap) * Δtobs))
+    X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
+    X_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
     cols = Makie.wong_colors()
-	
-	fig = Figure()
-	
-	ax1 = Axis(fig[1,1], title="Localized EnKF")
-	
-	# scatter!(ax1, xgrid, x_tsnap, label = "Truth")
-	lines!(ax1, xgrid, X_locenkf_tsnap, linewidth = 3, label = "LocEnKF")
-	lines!(ax1, xgrid, ys, linewidth = 3, label = "State")
-	for j in 1:Ne
-		lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=( cols[1+(j % length(cols))], 0.2))
-	end
-	scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
-	
-	axislegend(ax1)
-	
-	
-	framerate = 10
-	timestamps = range(t_start, Tf, step = 1)
-	
-	anim = Makie.Record(fig, timestamps; framerate = framerate) do t
-	    tsnap[] = t
-	end
-	save("assim_lenkf.gif", anim)
-	anim
+
+    fig = Figure()
+
+    ax1 = Axis(fig[1, 1], title="Localized EnKF")
+
+    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
+    lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="LocEnKF")
+    lines!(ax1, xgrid, ys, linewidth=3, label="State")
+    for j in 1:Ne
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+    end
+    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
+
+    axislegend(ax1)
+
+
+    framerate = 10
+    timestamps = range(t_start, Tf, step=1)
+
+    anim = Makie.Record(fig, timestamps; framerate=framerate) do t
+        tsnap[] = t
+    end
+    save("assim_lenkf.gif", anim)
+    anim
 end
 
 # %%
-fig = Figure(fontsize = 20, size = (1200, 400))
+fig = Figure(fontsize=20, size=(1200, 400))
 
 
-ax1 = Axis(fig[1,1], 
-           title = L"\text{Truth}",
-           xlabel = L"t",
-           ylabel = L"x",)
+ax1 = Axis(fig[1, 1],
+    title=L"\text{Truth}",
+    xlabel=L"t",
+    ylabel=L"x",)
 
 h1 = heatmap!(ax1, data.tt, xgrid, data.xt')
 
-Colorbar(fig[1, 4], h1, label = L"u(x, t)")
+Colorbar(fig[1, 4], h1, label=L"u(x, t)")
 
 
-ax2 = Axis(fig[1,2], 
-           title = L"\text{EnKF}",
-           xlabel = L"t",
-           ylabel = L"x",)
-h2 = heatmap!(ax2, data.tt, xgrid, mean_hist(X_locenkf)[:,2:end]')
+ax2 = Axis(fig[1, 2],
+    title=L"\text{EnKF}",
+    xlabel=L"t",
+    ylabel=L"x",)
+h2 = heatmap!(ax2, data.tt, xgrid, mean_hist(X_locenkf)[:, 2:end]')
 
 
-ax3 = Axis(fig[1,3],
-           title = L"\text{GSBL EnKF}",
-           xlabel = L"t",
-           ylabel = L"x",)
-h3 = heatmap!(ax3, data.tt, xgrid, mean_hist(X_hlocenkf)[:,2:end]')
+ax3 = Axis(fig[1, 3],
+    title=L"\text{GSBL EnKF}",
+    xlabel=L"t",
+    ylabel=L"x",)
+h3 = heatmap!(ax3, data.tt, xgrid, mean_hist(X_hlocenkf)[:, 2:end]')
 
 save("heatmap_inviscid_burgers.pdf", fig)
 
