@@ -64,11 +64,11 @@ xs = xgrid[PA_offset+1:end-PA_offset];
 
 # %%
 Δtdyn = 0.01
-Δtobs = 0.05
+Δtobs = 0.01
 
 # %%
 t0 = 0.0
-Tf = 200
+Tf = Int(1.0 / Δtobs)
 Tspin = 100
 tf = t0 + Tf * Δtobs
 
@@ -155,7 +155,7 @@ X = zeros(model.Ny + model.Nx, Ne)
 
 for i = 1:Ne
     regenerate!(f0)
-    X[Ny+1:Ny+Nx, i] = f0.(xgrid) / 4 .+ 0.5#initial_condition(αk, Δx, Nx)
+    X[Ny+1:Ny+Nx, i] = f0.(xgrid) / 3 .+ 0.5#initial_condition(αk, Δx, Nx)
 end
 
 # %%

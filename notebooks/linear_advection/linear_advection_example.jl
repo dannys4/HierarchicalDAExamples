@@ -18,7 +18,6 @@ using Pkg
 Pkg.activate("../..")
 
 using Revise
-
 using Trixi
 using LinearAlgebra
 using OrdinaryDiffEq
@@ -91,9 +90,6 @@ function Trixi.entropy2cons(t, ::LinearScalarAdvectionEquation1D)
     t
 end
 
-stepsize_callback = StepsizeCallback(cfl=0.2)
-sol = solve(ode, SSPRK43(), adaptive=true, callback=stepsize_callback);
-
 if mesh isa StructuredMesh
     dx = (coordinates_max - coordinates_min) / N_elements
     mesh_x = Matrix{Float64}(undef, length(basis.nodes), N_elements)
@@ -133,25 +129,24 @@ Ny = ceil(Int64, Nx / Δy)
 Δtdyn = 0.05
 Δtobs = 0.25
 t0 = 0.0
-Tf = 20
+Tf = 100
 Tspin = 1000
 tf = t0 + Tf * Δtobs
 π0 = MvNormal(zeros(Nx), Matrix(1.0 * I, Nx, Nx))
-σx_true = 0.05
+σx_data = 1e-6
 σy = 0.1
 
 h(x, t) = x[1:Δy:end]
 H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[1:Δy:end, :]))
 F = StateSpace(x -> x, h)
 sys_advection = TrixiSystem(equations, solver, mesh, semi)
-ϵx_true = AdditiveInflation(Nx, zeros(Nx), σx_true)
+ϵx_true = AdditiveInflation(Nx, zeros(Nx), σx_data)
 ϵy = AdditiveInflation(Ny, zeros(Ny), σy)
 model = Model(Nx, Ny, Δtdyn, Δtobs, ϵx_true, ϵy, π0, 0, 0, 0, F)
 
 u0 = initial_condition_sawtooth_fcn.(xgrid, (0,))
 data = generate_data_trixi(model, u0, Tf, sys_advection)
 
-# + jupyter={"source_hidden": true}
 with_theme(my_theme) do
     fig = Figure()
     ax = Axis(fig[1, 1], xlabel=L"x", title="Generated data")
@@ -165,17 +160,13 @@ with_theme(my_theme) do
     fig
 end
 
-f0 = SmoothPeriodic(xgrid, 0.8)
-
-lines(xgrid, f0.(xgrid))
-
 # +
-Ne = 100
+Ne = 50
 X0 = zeros(model.Ny + model.Nx, Ne)
 
 for i = 1:Ne
     regenerate!(f0)
-    X0[Ny+1:Ny+Nx, i] = exp.(f0.(xgrid) / 2) .- 0.5#initial_condition(αk, Δx, Nx)
+    X0[Ny+1:Ny+Nx, i] = 0.5*(f0.(xgrid) .+ 1.)
 end
 
 # + jupyter={"source_hidden": true}
@@ -192,97 +183,6 @@ with_theme(my_theme) do
     lines!(ax, xgrid, u0, linewidth=5, label="Truth")
     axislegend()
     fig
-end
-# -
-
-order_PA = 3
-Nx = length(xgrid)
-PA_offset = ceil(Int, order_PA / 2)
-Ns = Nx - 2PA_offset
-PA = PolyAnnil(xgrid, order_PA; istruncated=true)
-S = LinearMaps.FunctionMap{Float64,true}((s, x) -> mul!(s, PA.P, x), (x, s) -> mul!(x, PA.P', s), Ns, Nx; issymmetric=false, isposdef=false)
-xgrid_S = xgrid[PA_offset+1:end-PA_offset];
-
-# +
-idx = 4
-
-## Selecion of hyper-prior parameters
-# power parameter
-r_range = [1.0, 0.5, -0.5, -1.0];
-r = r_range[idx] # select parameter 
-# shape parameter
-β_range = [1.501, 3.0918, 2.0165, 1.0017];
-β_dist = β_range[idx] # shape parameter
-# rate parameters 
-ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
-ϑ = ϑ_range[idx]
-
-dist = GeneralizedGamma(r, β_dist, ϑ);
-
-# +
-yidx = 1:Δy:Nx
-
-# # Create Localization structure
-Gxx(i, j) = periodicmetric!(i, j, Nx)
-Gxy(i, j) = periodicmetric!(i, yidx[j], Nx)
-Gyy(i, j) = periodicmetric!(yidx[i], yidx[j], Nx)
-
-Lrad = 7
-Loc = Localization(Lrad, Gxx, Gxy, Gxx)
-β_infl = 1.02
-σx_enkf = σx_true
-ϵxβ_enkf = MultiAddInflation(Nx, β_infl, zeros(Nx), σx_enkf)
-# -
-
-Cθ = LinearMap(Diagonal(rand(dist, Ns)))
-Cϵ = LinearMap(ϵy.Σ)
-# This CX is replaced with the estimated state cov at each step
-CX = LinearMap(I(Nx))
-sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX)
-θinit = rand(dist, Ns);
-
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, deepcopy(θinit), Δtdyn, Δtobs, Niter=40, θinit=1.)
-
-X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
-
-[maximum(abs.(t)) for t in θhist]
-
-with_theme(my_theme) do
-    t_start = 4
-    tsnap = Observable(t_start)
-    x_tsnap = @lift(data.xt[:, $tsnap])
-    y_tsnap = @lift(data.yt[:, $tsnap])
-    ut = t -> map(x -> x[], vec(sol(t)))
-    ys = @lift(ut(($tsnap) * Δtobs))
-    X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
-    X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
-    theta_tsnap = @lift(θhist[$tsnap+1])
-    cols = Makie.wong_colors()
-
-    fig = Figure()
-
-    ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
-
-    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
-    lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
-    lines!(ax1, xgrid, ys, linewidth=3, label="State")
-    lines!(ax1, xgrid[PA_offset+1:end-PA_offset], theta_tsnap, linewidth=3, label="θ")
-    for j in 1:Ne
-        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
-    end
-    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
-
-    axislegend(ax1)
-
-
-    framerate = 10
-    timestamps = range(t_start, Tf, step=1)
-
-    anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
-        tsnap[] = t
-    end
-    save("figs/assim_hlenkf.mp4", anim)
-    anim
 end
 
 # +
@@ -323,6 +223,93 @@ with_theme(my_theme) do
         tsnap[] = t
     end
     save("figs/assim_enkf.mp4", anim)
+    anim
+end
+
+order_PA = 3
+Nx = length(xgrid)
+PA_offset = ceil(Int, order_PA / 2)
+Ns = Nx - 2PA_offset
+PA = PolyAnnil(xgrid, order_PA; istruncated=true)
+S = LinearMaps.FunctionMap{Float64,true}((s, x) -> mul!(s, PA.P, x), (x, s) -> mul!(x, PA.P', s), Ns, Nx; issymmetric=false, isposdef=false)
+xgrid_S = xgrid[PA_offset+1:end-PA_offset];
+
+# +
+idx = 4
+
+## Selecion of hyper-prior parameters
+# power parameter
+r_range = [1.0, 0.5, -0.5, -1.0];
+r = r_range[idx] # select parameter 
+# shape parameter
+β_range = [1.501, 3.0918, 2.0165, 1.0017];
+β_dist = β_range[idx] # shape parameter
+# rate parameters 
+ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
+ϑ = ϑ_range[idx]
+
+dist = GeneralizedGamma(r, β_dist, ϑ);
+
+# +
+yidx = 1:Δy:Nx
+
+# # Create Localization structure
+Gxx(i, j) = periodicmetric!(i, j, Nx)
+Gxy(i, j) = periodicmetric!(i, yidx[j], Nx)
+Gyy(i, j) = periodicmetric!(yidx[i], yidx[j], Nx)
+
+Lrad = 7
+Loc = Localization(Lrad, Gxx, Gxy, Gxx)
+β_infl = 1.02
+σx_filter = 0.05
+ϵxβ_enkf = MultiAddInflation(Nx, β_infl, zeros(Nx), σx_filter)
+# -
+
+Cθ = LinearMap(Diagonal(rand(dist, Ns)))
+Cϵ = LinearMap(ϵy.Σ)
+# This CX is replaced with the estimated state cov at each step
+CX = LinearMap(I(Nx))
+sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX)
+θinit = rand(dist, Ns);
+
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, deepcopy(θinit), Δtdyn, Δtobs, Niter=5, θinit=1.)
+
+X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+
+with_theme(my_theme) do
+    t_start = 4
+    tsnap = Observable(t_start)
+    x_tsnap = @lift(data.xt[:, $tsnap])
+    y_tsnap = @lift(data.yt[:, $tsnap])
+    X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
+    X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
+    theta_tsnap = @lift(θhist[$tsnap+1])
+    cols = Makie.wong_colors()
+
+    fig = Figure()
+
+    ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
+
+    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
+    lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
+    lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
+    # lines!(ax1, xgrid, ys, linewidth=3, label="State")
+    lines!(ax1, xgrid[PA_offset+1:end-PA_offset], theta_tsnap, linewidth=3, label="θ")
+    for j in 1:Ne
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+    end
+    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
+
+    axislegend(ax1)
+
+
+    framerate = 10
+    timestamps = range(t_start, Tf, step=1)
+
+    anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
+        tsnap[] = t
+    end
+    save("figs/assim_hlenkf.mp4", anim)
     anim
 end
 
