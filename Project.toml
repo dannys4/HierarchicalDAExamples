@@ -13,3 +13,6 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 TransportBasedInference2 = "1fffb988-1a3a-4757-b9a7-a23a87666c1e"
 Trixi = "a7f1ee26-1774-49b1-8366-f1abc58fbfcb"
+
+[compat]
+HierarchicalDA = "0.1.1"
