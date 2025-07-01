@@ -1,7 +1,12 @@
 Manifest.toml
 .vscode
+
+# Graphics
 *.gif
+*.mp4
+*.png
+
+# Notebooks
 *.ipynb
 **/.ipynb_checkpoints
-*.mp4
 **/.virtual_documents
