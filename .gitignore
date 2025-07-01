@@ -6,6 +6,9 @@ Manifest.toml
 *.mp4
 *.png
 
+# Data
+*.jld2
+
 # Notebooks
 *.ipynb
 **/.ipynb_checkpoints
