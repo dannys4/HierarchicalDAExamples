@@ -20,7 +20,6 @@ proj_path = joinpath(@__DIR__, "..", "..")
 Pkg.activate(proj_path)
 
 # %%
-using Revise
 using TransportBasedInference2
 using HierarchicalDA
 using LinearAlgebra
