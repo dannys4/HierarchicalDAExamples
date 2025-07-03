@@ -67,7 +67,7 @@ alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 # GSBL Hyperparams
 order_PA = 3 # Poly annihilator order
 Niter = 5
-θinit = 1.
+theta_init = 1.
 
 hyperprior_idx = 3
 
@@ -215,12 +215,12 @@ PA = PolyAnnil(xgrid, order_PA; istruncated=true)
 S = LinearMaps.FunctionMap{Float64,true}((s, x) -> mul!(s, PA.P, x), (x, s) -> mul!(x, PA.P', s),
     Ns, Nx; issymmetric=false, isposdef=false)
 
-θinit_vec = fill(θinit, Ns)
-Cθ = LinearMap(Diagonal(θinit_vec))
+theta_init_vec = fill(theta_init, Ns)
+Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX);
 
 # %%
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, θinit_vec, delta_t_dyn, delta_t_obs; Niter, θinit)
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
 
 # %%
 @info "Performing GSBL EnKF..."
@@ -277,7 +277,7 @@ jldopen(joinpath(@__DIR__, "data", "burgers_" * string(now()) * ".jld2"), "w") d
     end
 
     GSBL_param_group = JLD2.Group(file, "GSBL_parameters")
-    for GSBL_param in [:order_PA, :Niter, :θinit, :dist]
+    for GSBL_param in [:order_PA, :Niter, :theta_init, :dist]
         GSBL_param_group[string(GSBL_param)] = @eval($GSBL_param)
     end
 
