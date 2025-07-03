@@ -43,7 +43,6 @@ my_theme = Theme()
 
 # %%
 random_seed = rand(UInt)
-Random.seed!(random_seed);
 
 # %%
 # PDE solution parameters
@@ -55,12 +54,56 @@ coordinates_min, coordinates_max = -1., 1.
 
 # %%
 # Data generation setup
-Δy = 50
-Δtdyn = 0.05
-Δtobs = 0.25
+delta_y = 50
+delta_t_dyn = 0.05
+delta_t_obs = 0.25
 t0, tf = 0.0, 25.0
-σx_data = 1e-5
-σy = 0.2
+sigma_x_data = 1e-5
+sigma_y = 0.2
+
+# %% [markdown]
+# ### Parameters for Filtering
+
+# %%
+# Important parameters for data assimilation
+Ne = 50 # Ensemble size
+Lrad = 7 # Localization radius
+sigma_x_filter = 0.15 # State noise
+beta_infl = 1.02 # Inflation param
+alpha_k_f0 = 0.8 # Parameter for initial condition
+
+# %% [markdown]
+# ### Parameters for GSBL
+
+# %%
+order_PA = 3
+hyperprior_idx = 4
+theta_init = 1.
+Niter = 5
+
+# %%
+# Assign any given arguments
+length(ARGS) > 0 && @info "Given arguments: " ARGS
+for arg in ARGS
+    key, val = split(arg, "=")
+    sym_key = Symbol(key)
+    val_T = @eval($sym_key)
+    pre_val_type = typeof(val_T)
+    is_err = false
+    try
+        val_T = parse(pre_val_type, val)
+    catch e
+        is_err = true
+    end
+    if is_err
+        @error "Could not parse value in $key=$val to type $pre_val_type"
+        val_T = parse(pre_val_type, val)
+    end
+    @eval($sym_key = $val_T)
+end
+
+# %%
+Random.seed!(random_seed);
 
 # %%
 # Set up functions for the PDE, initial condition and entropy setup
@@ -106,57 +149,47 @@ xgrid = vec(mesh.md.xq);
 
 # %%
 Nx = length(xgrid)
-Ny = ceil(Int64, Nx / Δy)
-Tf = Int((tf - t0) / Δtobs)
+Ny = ceil(Int64, Nx / delta_y)
+Tf = Int((tf - t0) / delta_t_obs)
 π0 = MvNormal(zeros(Nx), Matrix(1.0 * I, Nx, Nx))
 
 # %%
-h(x, t) = x[1:Δy:end]
-H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[1:Δy:end, :]))
+h(x, t) = x[1:delta_y:end]
+H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[1:delta_y:end, :]))
 F = StateSpace(x -> x, h)
 sys_advection = TrixiSystem(equations, solver, mesh, semi)
-ϵx_data = AdditiveInflation(Nx, zeros(Nx), σx_data)
-ϵy = AdditiveInflation(Ny, zeros(Ny), σy)
-model = Model(Nx, Ny, Δtdyn, Δtobs, ϵx_data, ϵy, π0, 0, 0, 0, F)
+ϵx_data = AdditiveInflation(Nx, zeros(Nx), sigma_x_data)
+ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y)
+model = Model(Nx, Ny, delta_t_dyn, delta_t_obs, ϵx_data, ϵy, π0, 0, 0, 0, F)
 
 # %%
 u0 = initial_condition_sawtooth_fcn.(xgrid, (0,))
+@info "Generating data..."
 data = generate_data_trixi(model, u0, Tf, sys_advection)
 
 # %%
 make_figs && with_theme(my_theme) do
     fig = Figure()
     ax = Axis(fig[1, 1])
-    
+
     lines!(ax, xgrid, data.xt[:, 1])
     lines!(ax, xgrid, data.xt[:, end])
-    scatter!(ax, xgrid[1:Δy:end], data.yt[:, end])
-    
+    scatter!(ax, xgrid[1:delta_y:end], data.yt[:, end])
+
     fig
 end
 
-# %% [markdown]
-# ### Parameters for Filtering
-
 # %%
-# Important parameters for data assimilation
-Ne = 50 # Ensemble size
-Lrad = 7 # Localization radius
-σx_filter = 0.15 # State noise
-β_infl = 1.02 # Inflation param
-αk_f0 = 0.8 # Parameter for initial condition
-
-# %%
-f0 = SmoothPeriodic(xgrid, αk_f0)
+f0 = SmoothPeriodic(xgrid, alpha_k_f0)
 X0 = zeros(model.Ny + model.Nx, Ne)
 for i = 1:Ne
     regenerate!(f0)
-    X0[Ny+1:Ny+Nx, i] = 0.5*(f0.(xgrid) .+ 1.)
+    X0[Ny+1:Ny+Nx, i] = 0.5 * (f0.(xgrid) .+ 1.)
 end
 
 # %%
 Nx = length(xgrid)
-yidx = 1:Δy:Nx
+yidx = 1:delta_y:Nx
 
 # # Create Localization structure
 Gxx(i, j) = periodicmetric!(i, j, Nx)
@@ -164,27 +197,18 @@ Gxy(i, j) = periodicmetric!(i, yidx[j], Nx)
 Gyy(i, j) = periodicmetric!(yidx[i], yidx[j], Nx)
 
 Loc = Localization(Lrad, Gxx, Gxy, Gxx)
-ϵxβ_enkf = MultiAddInflation(Nx, β_infl, zeros(Nx), σx_filter)
+ϵxβ_enkf = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
 Cϵ = LinearMap(ϵy.Σ)
 # This CX is replaced with the estimated state cov at each step
 CX = LinearMap(I(Nx))
 sys_y = ObsSystem(H, Cϵ, CX)
-locenkf = LocEnKF(Ne, ϵy, sys_y, Loc, Δtdyn, Δtobs)
+locenkf = LocEnKF(Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 
 # %%
+@info "Performing EnKF..."
 X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
-
-
-# %% [markdown]
-# ### Parameters for GSBL
-
-# %%
-order_PA = 3
-hyperprior_idx = 4
-θinit = 1.
-Niter = 5
 
 ## Selecion of hyper-prior parameters
 # power parameter
@@ -207,83 +231,83 @@ S = LinearMaps.FunctionMap{Float64,true}((s, x) -> mul!(s, PA.P, x), (x, s) -> m
 xgrid_S = xgrid[PA_offset+1:end-PA_offset];
 
 # %%
-θinit_vec = fill(θinit, Ns)
-Cθ = LinearMap(Diagonal(θinit_vec))
+theta_init_vec = fill(theta_init, Ns)
+Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX)
 
 # %%
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, θinit_vec, Δtdyn, Δtobs; Niter, θinit)
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
 
 # %%
+@info "Performing GSBL EnKF..."
 X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
-
 
 # %%
 mesh_weights = vec(sys_advection.mesh.md.wJq);
 
 # %%
-weighted_norm2 = (x,w)-> sqrt( sum( dim_idx->w[dim_idx]*abs2(x[dim_idx]), eachindex(x,w) ) )
+weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
 rel_norms = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
 
 errs_locenkf2 = map(j -> CRPS(X_locenkf[j+1], @view(data.xt[:, j]), :norm2, mesh_weights), axes(data.xt, 2))
 errs_hlocenkf2 = map(j -> CRPS(X_hlocenkf[j+1], @view(data.xt[:, j]), :norm2, mesh_weights), axes(data.xt, 2))
 
-rmse2_locenkf, rmse2_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
-crps2_locenkf, crps2_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
+rmse2_locenkf, rmse2_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
+crps2_locenkf, crps2_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
 make_figs && @info "2-Norm results" rmse2_locenkf crps2_locenkf "======================" rmse2_hlocenkf crps2_hlocenkf;
 
 # %%
-weighted_norm1 = (x,w)-> sum( dim_idx->w[dim_idx]*abs(x[dim_idx]), eachindex(x,w) )
+weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
 rel_norms = map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
 
 errs_locenkf1 = map(j -> CRPS(X_locenkf[j+1], @view(data.xt[:, j]), :norm1, mesh_weights), axes(data.xt, 2))
 errs_hlocenkf1 = map(j -> CRPS(X_hlocenkf[j+1], @view(data.xt[:, j]), :norm1, mesh_weights), axes(data.xt, 2))
 
-rmse1_locenkf, rmse1_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
-crps1_locenkf, crps1_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
+rmse1_locenkf, rmse1_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
+crps1_locenkf, crps1_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
 make_figs && @info "1-Norm results" rmse1_locenkf crps1_locenkf "======================" rmse1_hlocenkf crps1_hlocenkf;
 
 # %%
 mass_true, energy_true = [weight_sum_reduction.(eachcol(data.xt), fcn, (mesh_weights,)) for fcn in (abs, abs2)]
 mass_locenkf, energy_locenkf = [reduce(hcat, weight_sum_reduction.(eachcol(x), fcn, (mesh_weights,)) for x in X_locenkf) for fcn in (abs, abs2)]
 mass_hlocenkf, energy_hlocenkf = [reduce(hcat, weight_sum_reduction.(eachcol(x), fcn, (mesh_weights,)) for x in X_hlocenkf) for fcn in (abs, abs2)]
-mass_err_locenkf, energy_err_locenkf = [mean(t_idx -> abs(mean(enkf[:,t_idx+1]) - truth[t_idx])/truth[t_idx], eachindex(truth)) for (truth, enkf) in [(mass_true, mass_locenkf), (energy_true, energy_locenkf)]]
-mass_err_hlocenkf, energy_err_hlocenkf = [mean(t_idx -> abs(mean(enkf[:,t_idx+1]) - truth[t_idx])/truth[t_idx], eachindex(truth)) for (truth, enkf) in [(mass_true, mass_hlocenkf), (energy_true, energy_hlocenkf)]]
+mass_err_locenkf, energy_err_locenkf = [mean(t_idx -> abs(mean(enkf[:, t_idx+1]) - truth[t_idx]) / truth[t_idx], eachindex(truth)) for (truth, enkf) in [(mass_true, mass_locenkf), (energy_true, energy_locenkf)]]
+mass_err_hlocenkf, energy_err_hlocenkf = [mean(t_idx -> abs(mean(enkf[:, t_idx+1]) - truth[t_idx]) / truth[t_idx], eachindex(truth)) for (truth, enkf) in [(mass_true, mass_hlocenkf), (energy_true, energy_hlocenkf)]]
 make_figs && @info "Summary stat results" mass_err_locenkf energy_err_locenkf "======================" mass_err_hlocenkf energy_err_hlocenkf;
 
 # %%
-jldopen(joinpath("data", "linear_advection_"*string(now())*".jld2"), "w") do file
+jldopen(joinpath(@__DIR__, "data", "linear_advection_" * string(now()) * ".jld2"), "w") do file
     data_group = JLD2.Group(file, "data")
     for property in propertynames(data)
         data_group[string(property)] = getproperty(data, property)
     end
-    
+
     data_param_group = JLD2.Group(file, "data_parameters")
-    for data_param in [:random_seed, :polydeg, :Ncells, :Δtdyn, :Δtobs, :σx_data, :σy, :t0, :tf]
+    for data_param in [:random_seed, :polydeg, :Ncells, :delta_t_dyn, :delta_t_obs, :sigma_x_data, :sigma_y, :t0, :tf]
         data_param_group[string(data_param)] = @eval($data_param)
     end
-    
+
     filter_param_group = JLD2.Group(file, "filter_parameters")
-    for filter_param in [:Ne, :Lrad, :σx_filter, :β_infl, :αk_f0]
+    for filter_param in [:Ne, :Lrad, :sigma_x_filter, :beta_infl, :alpha_k_f0]
         filter_param_group[string(filter_param)] = @eval($filter_param)
     end
 
     GSBL_param_group = JLD2.Group(file, "GSBL_parameters")
-    for GSBL_param in [:order_PA, :Niter, :θinit, :dist]
+    for GSBL_param in [:order_PA, :Niter, :theta_init, :dist]
         GSBL_param_group[string(GSBL_param)] = @eval($GSBL_param)
     end
 
     metric_group = JLD2.Group(file, "metrics")
-    
+
     for alg in ["locenkf", "hlocenkf"]
         metric_subgroup = JLD2.Group(metric_group, alg)
         for metric in ["rmse1", "crps1", "rmse2", "crps2", "mass_err", "energy_err"]
-            metric_symbol = Symbol(metric*"_"*alg)
+            metric_symbol = Symbol(metric * "_" * alg)
             metric_subgroup[metric] = @eval($metric_symbol)
         end
     end
-    
-    
+
+
     filter_group = JLD2.Group(file, "filters")
     filter_group["X_locenkf"] = ("Localized EnKF", X_locenkf)
     filter_group["X_hlocenkf"] = ("Hierarchical Localized EnKF", X_hlocenkf)
@@ -312,7 +336,7 @@ make_figs && with_theme(my_theme) do
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
     end
-    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
+    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
 
     axislegend(ax1)
 
@@ -323,7 +347,7 @@ make_figs && with_theme(my_theme) do
     anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
         tsnap[] = t
     end
-    save("figs/assim_hlenkf.mp4", anim)
+    save(joinpath(@__DIR__, "figs", "assim_hlenkf.mp4"), anim)
     anim
 end
 
@@ -334,7 +358,7 @@ make_figs && with_theme(my_theme) do
     cols = Makie.wong_colors()
 
     x_tsnap = @lift(data.xt[:, $tsnap])
-    x_tsnap_plus = @lift(data.xt[:, $tsnap] .+ σx_filter)
+    x_tsnap_plus = @lift(data.xt[:, $tsnap] .+ sigma_x_filter)
     y_tsnap = @lift(data.yt[:, $tsnap])
     X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
     X_locenkf_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
@@ -349,7 +373,7 @@ make_figs && with_theme(my_theme) do
     for j in 1:Ne
         lines!(ax1, xgrid, X_locenkf_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
     end
-    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
+    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
 
     axislegend(ax1)
 
@@ -360,7 +384,7 @@ make_figs && with_theme(my_theme) do
     anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
         tsnap[] = t
     end
-    save("figs/assim_enkf.mp4", anim)
+    save(joinpath(@__DIR__, "figs", "assim_enkf.mp4"), anim)
     anim
 end
 
