@@ -2,11 +2,11 @@
 # ---
 # jupyter:
 #   jupytext:
-#     formats: ipynb,jl:light
+#     formats: ipynb,jl:percent
 #     text_representation:
 #       extension: .jl
-#       format_name: light
-#       format_version: '1.5'
+#       format_name: percent
+#       format_version: '1.3'
 #       jupytext_version: 1.16.7
 #   kernelspec:
 #     display_name: Julia 1.11.5
@@ -14,9 +14,11 @@
 #     name: julia-1.11
 # ---
 
+# %%
 using Pkg
 Pkg.activate("../..")
 
+# %%
 using Revise
 using Trixi
 using LinearAlgebra
@@ -29,8 +31,10 @@ using TransportBasedInference2
 using Distributions
 using SparseArrays
 
+# %%
 my_theme = Theme()
 
+# %%
 function initial_condition_sawtooth_fcn(x, t;
     a=-1, b=1, N_saw=4, u_a=0.0, u_b=0.95)
     normalized_x = (x[] - a) / (b - a)
@@ -42,6 +46,7 @@ function initial_condition_sawtooth(x, t, _::LinearScalarAdvectionEquation1D)
     SVector(initial_condition_sawtooth_fcn(x, t))
 end
 
+# %%
 with_theme(my_theme) do
     fig = Figure()
     ax = Axis(fig[1, 1], title="Initial condition", ylabel=L"u(0,x)", xlabel=L"x")
@@ -49,7 +54,7 @@ with_theme(my_theme) do
     fig
 end
 
-# +
+# %%
 polydeg = 8
 advection_velocity = 0.1
 equations = LinearScalarAdvectionEquation1D(advection_velocity)
@@ -83,13 +88,14 @@ semi = SemidiscretizationHyperbolic(mesh,
     solver, boundary_conditions=boundary_condition_periodic)
 tspan = (0.0, 10.0 - eps())
 ode = semidiscretize(semi, tspan);
-# -
 
+# %%
 using Trixi: entropy2cons
 function Trixi.entropy2cons(t, ::LinearScalarAdvectionEquation1D)
     t
 end
 
+# %%
 if mesh isa StructuredMesh
     dx = (coordinates_max - coordinates_min) / N_elements
     mesh_x = Matrix{Float64}(undef, length(basis.nodes), N_elements)
@@ -108,6 +114,7 @@ else
 end
 xgrid = vec(mesh_x);
 
+# %%
 with_theme(my_theme) do
     ut = t -> map(x -> x[], vec(sol(t)))
     time = Observable(0.0)
@@ -123,6 +130,7 @@ with_theme(my_theme) do
     anim
 end
 
+# %%
 Δy = 50
 Nx = length(xgrid)
 Ny = ceil(Int64, Nx / Δy)
@@ -136,6 +144,7 @@ tf = t0 + Tf * Δtobs
 σx_data = 1e-6
 σy = 0.1
 
+# %%
 h(x, t) = x[1:Δy:end]
 H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[1:Δy:end, :]))
 F = StateSpace(x -> x, h)
@@ -144,9 +153,11 @@ sys_advection = TrixiSystem(equations, solver, mesh, semi)
 ϵy = AdditiveInflation(Ny, zeros(Ny), σy)
 model = Model(Nx, Ny, Δtdyn, Δtobs, ϵx_true, ϵy, π0, 0, 0, 0, F)
 
+# %%
 u0 = initial_condition_sawtooth_fcn.(xgrid, (0,))
 data = generate_data_trixi(model, u0, Tf, sys_advection)
 
+# %%
 with_theme(my_theme) do
     fig = Figure()
     ax = Axis(fig[1, 1], xlabel=L"x", title="Generated data")
@@ -160,7 +171,7 @@ with_theme(my_theme) do
     fig
 end
 
-# +
+# %%
 Ne = 50
 X0 = zeros(model.Ny + model.Nx, Ne)
 
@@ -169,7 +180,7 @@ for i = 1:Ne
     X0[Ny+1:Ny+Nx, i] = 0.5*(f0.(xgrid) .+ 1.)
 end
 
-# + jupyter={"source_hidden": true}
+# %% jupyter={"source_hidden": true}
 with_theme(my_theme) do
     fig = Figure()
 
@@ -185,13 +196,13 @@ with_theme(my_theme) do
     fig
 end
 
-# +
+# %%
 sys_y = ObsSystem(H, Cϵ, CX)
 Lenkf = LocEnKF(Ne, ϵy, sys_y, Loc, Δtdyn, Δtobs)
 
 X_Lenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, Lenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
-# -
 
+# %%
 with_theme(my_theme) do
     t_start = 3
     tsnap = Observable(t_start)
@@ -226,6 +237,7 @@ with_theme(my_theme) do
     anim
 end
 
+# %%
 order_PA = 3
 Nx = length(xgrid)
 PA_offset = ceil(Int, order_PA / 2)
@@ -234,7 +246,7 @@ PA = PolyAnnil(xgrid, order_PA; istruncated=true)
 S = LinearMaps.FunctionMap{Float64,true}((s, x) -> mul!(s, PA.P, x), (x, s) -> mul!(x, PA.P', s), Ns, Nx; issymmetric=false, isposdef=false)
 xgrid_S = xgrid[PA_offset+1:end-PA_offset];
 
-# +
+# %%
 idx = 4
 
 ## Selecion of hyper-prior parameters
@@ -250,7 +262,7 @@ r = r_range[idx] # select parameter
 
 dist = GeneralizedGamma(r, β_dist, ϑ);
 
-# +
+# %%
 yidx = 1:Δy:Nx
 
 # # Create Localization structure
@@ -263,8 +275,8 @@ Loc = Localization(Lrad, Gxx, Gxy, Gxx)
 β_infl = 1.02
 σx_filter = 0.05
 ϵxβ_enkf = MultiAddInflation(Nx, β_infl, zeros(Nx), σx_filter)
-# -
 
+# %%
 Cθ = LinearMap(Diagonal(rand(dist, Ns)))
 Cϵ = LinearMap(ϵy.Σ)
 # This CX is replaced with the estimated state cov at each step
@@ -272,10 +284,13 @@ CX = LinearMap(I(Nx))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX)
 θinit = rand(dist, Ns);
 
+# %%
 hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, deepcopy(θinit), Δtdyn, Δtobs, Niter=5, θinit=1.)
 
+# %%
 X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
+# %%
 with_theme(my_theme) do
     t_start = 4
     tsnap = Observable(t_start)
@@ -313,4 +328,4 @@ with_theme(my_theme) do
     anim
 end
 
-
+# %%
