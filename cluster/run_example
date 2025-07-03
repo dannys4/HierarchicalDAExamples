@@ -1,0 +1,41 @@
+#! /usr/bin/env python
+import argparse
+import shutil, os
+import subprocess, tqdm
+
+parser = argparse.ArgumentParser(
+    prog='run_example',
+    usage='./run_example EXAMPLE [-n num_samples] -- [param1=val1 param2=val2 ...]',
+    description='Run an example script for HierarchicalDA. Use "--" between number of trials and any parameters.',
+)
+
+examples = [name for name in os.listdir('.') if os.path.isdir(name) and not name.startswith('.')]
+
+parser.add_argument('example',
+                    help='Which example to run',
+                    choices=examples)
+
+parser.add_argument('-n', '--number',
+                    help='Number of trials',
+                    type=int,
+                    default=1)
+
+parser.add_argument('parameters',
+                    help='parameters to pass onto the simulation (e.g., sigma_x_data, sigma_y, delta_t_obs, etc.)',
+                    nargs='*')
+
+def run_example(example, args):
+    subprocess.run(["julia", os.path.join(example,example+".jl"), *args])
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+    N = args.number
+    if N < 1:
+        raise ValueError("N must be >= 1, received " + str(N))
+    elif N == 1:
+        run_example(args.example, args.parameters)
+    else:
+        print(f"Performing iterations 1,...,{N}!")
+        for j in range(N):
+            print(f'Iteration {j+1}....')
+            run_example(args.example, args.parameters)
