@@ -17,4 +17,9 @@ TransportBasedInference2 = "1fffb988-1a3a-4757-b9a7-a23a87666c1e"
 Trixi = "a7f1ee26-1774-49b1-8366-f1abc58fbfcb"
 
 [compat]
+julia = "1.11"
 HierarchicalDA = "0.1.1"
+
+[sources]
+HierarchicalDA = { url = "https://github.com/dannys4/2025_GSBL_DA_dev", rev="dannys4/pkg"}
+TransportBasedInference2 = { url = "https://github.com/dannys4/TransportBasedInference2.jl", rev="main"}
