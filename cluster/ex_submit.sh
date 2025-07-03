@@ -4,7 +4,7 @@
 #SBATCH -o log/burgers.log-%A-%a
 #SBATCH -N 1
 #SBATCH -a 1-12
-#SBATCH --mem=18G
+#SBATCH --mem=10G
 
 # Example slurm submission script
 # echo $(nproc)

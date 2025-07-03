@@ -2,17 +2,18 @@
 import argparse
 import shutil, os
 import subprocess, tqdm
+import copy
 
 parser = argparse.ArgumentParser(
     prog='run_example',
-    usage='./run_example EXAMPLE [-n num_samples] -- [param1=val1 param2=val2 ...]',
+    usage='./run_example EXAMPLE [-n num_samples] -- [param1=val11,val12 param2=val21,val22,val23 ...]',
     description='Run an example script for HierarchicalDA. Use "--" between number of trials and any parameters.',
 )
 
 examples = [name for name in os.listdir('.') if os.path.isdir(name) and not name.startswith('.')]
 
 parser.add_argument('example',
-                    help='Which example to run',
+                    help='Which example to run. Choose `test` to check the parameter sweep.',
                     choices=examples)
 
 parser.add_argument('-n', '--number',
@@ -21,21 +22,46 @@ parser.add_argument('-n', '--number',
                     default=1)
 
 parser.add_argument('parameters',
-                    help='parameters to pass onto the simulation (e.g., sigma_x_data, sigma_y, delta_t_obs, etc.)',
+                    help="""
+                    parameters to pass onto the simulation (e.g., sigma_x_data, sigma_y, delta_t_obs, etc.).
+
+                    For making an matrix of different parameters, separate them by commas.
+                    """,
                     nargs='*')
 
 def run_example(example, args):
     subprocess.run(["julia", os.path.join(example,example+".jl"), *args])
 
+def arg_matrix(args: list[str]):
+    matrix = []
+    for arg in args:
+        key, vals_str = arg.split('=')
+        vals_list = vals_str.split(',')
+        # Take care of base case
+        if len(matrix) == 0:
+            matrix = [[f'{key}={val}'] for val in vals_list]
+            continue
+        # If this arg has M values and we previously had N trials, should get M*N trials at this step
+        prev_matrix = matrix
+        matrix = []
+        for val in vals_list:
+            new_trials = copy.deepcopy(prev_matrix)
+            for trial in new_trials:
+                trial.append(f'{key}={val}')
+                matrix.append(trial)
+    return matrix
+
 if __name__ == '__main__':
     args = parser.parse_args()
-    N = args.number
+    # Repeat each trial N times
+    trials = arg_matrix(args.parameters)*args.number
+    N = len(trials)
     if N < 1:
         raise ValueError("N must be >= 1, received " + str(N))
     elif N == 1:
-        run_example(args.example, args.parameters)
+        run_example(args.example, trials[0])
     else:
         print(f"Performing iterations 1,...,{N}!")
-        for j in range(N):
+        for (j,trial) in enumerate(trials):
             print(f'Iteration {j+1}....')
-            run_example(args.example, args.parameters)
+            run_example(args.example, trial)
