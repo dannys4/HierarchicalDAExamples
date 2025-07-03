@@ -181,41 +181,6 @@ locenkf = LocEnKF(Ne, ϵy, sys_y, Loc, Δtdyn, Δtobs)
 X_locenkf = seqassim_trixi(data, Tf, ϵxβ_filter, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
-make_figs && with_theme(my_theme) do
-    t_start = 1
-    tsnap = Observable(t_start)
-    x_tsnap = @lift(data.xt[:, $tsnap])
-    y_tsnap = @lift(data.yt[:, $tsnap])
-    X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
-    X_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
-    cols = Makie.wong_colors()
-
-    fig = Figure()
-
-    ax1 = Axis(fig[1, 1], title="Localized EnKF")
-
-    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
-    lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="LocEnKF")
-    lines!(ax1, xgrid, ys, linewidth=3, label="State")
-    for j in 1:Ne
-        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
-    end
-    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
-
-    axislegend(ax1)
-
-
-    framerate = 10
-    timestamps = range(t_start, Tf, step=1)
-
-    anim = Makie.Record(fig, timestamps; framerate=framerate) do t
-        tsnap[] = t
-    end
-    save("figs/assim_lenkf.mp4", anim)
-    anim
-end
-
-# %%
 PA_offset = ceil(Int64, order_PA / 2)
 Ns = Nx - 2 * PA_offset
 
@@ -234,6 +199,77 @@ hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, θinit_vec, Δtdyn, Δtobs; Nite
 
 # %%
 X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxβ_filter, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
+
+# %%
+mesh_weights = vec(sys_burgers.mesh.md.wJq);
+
+# %%
+weighted_norm2 = (x,w)-> sqrt( sum( dim_idx->w[dim_idx]*abs2(x[dim_idx]), eachindex(x,w) ) )
+rel_norms = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
+
+errs_locenkf2 = map(j -> CRPS(X_locenkf[j+1], @view(data.xt[:, j]), :norm2, mesh_weights), axes(data.xt, 2))
+errs_hlocenkf2 = map(j -> CRPS(X_hlocenkf[j+1], @view(data.xt[:, j]), :norm2, mesh_weights), axes(data.xt, 2))
+
+rmse2_locenkf, rmse2_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
+crps2_locenkf, crps2_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
+make_figs && @info "2-Norm results" rmse2_locenkf crps2_locenkf "======================" rmse2_hlocenkf crps2_hlocenkf;
+
+# %%
+weighted_norm1 = (x,w)-> sum( dim_idx->w[dim_idx]*abs(x[dim_idx]), eachindex(x,w) )
+rel_norms = map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
+
+errs_locenkf1 = map(j -> CRPS(X_locenkf[j+1], @view(data.xt[:, j]), :norm1, mesh_weights), axes(data.xt, 2))
+errs_hlocenkf1 = map(j -> CRPS(X_hlocenkf[j+1], @view(data.xt[:, j]), :norm1, mesh_weights), axes(data.xt, 2))
+
+rmse1_locenkf, rmse1_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
+crps1_locenkf, crps1_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
+make_figs && @info "1-Norm results" rmse1_locenkf crps1_locenkf "======================" rmse1_hlocenkf crps1_hlocenkf;
+
+# %%
+mass_true, energy_true = [weight_sum_reduction.(eachcol(data.xt), fcn, (mesh_weights,)) for fcn in (abs, abs2)]
+mass_locenkf, energy_locenkf = [reduce(hcat, weight_sum_reduction.(eachcol(x), fcn, (mesh_weights,)) for x in X_locenkf) for fcn in (abs, abs2)]
+mass_hlocenkf, energy_hlocenkf = [reduce(hcat, weight_sum_reduction.(eachcol(x), fcn, (mesh_weights,)) for x in X_hlocenkf) for fcn in (abs, abs2)]
+mass_err_locenkf, energy_err_locenkf = [mean(t_idx -> abs(mean(enkf[:,t_idx+1]) - truth[t_idx])/truth[t_idx], eachindex(truth)) for (truth, enkf) in [(mass_true, mass_locenkf), (energy_true, energy_locenkf)]]
+mass_err_hlocenkf, energy_err_hlocenkf = [mean(t_idx -> abs(mean(enkf[:,t_idx+1]) - truth[t_idx])/truth[t_idx], eachindex(truth)) for (truth, enkf) in [(mass_true, mass_hlocenkf), (energy_true, energy_hlocenkf)]]
+make_figs && @info "Summary stat results" mass_err_locenkf energy_err_locenkf "======================" mass_err_hlocenkf energy_err_hlocenkf;
+
+# %%
+jldopen(joinpath("data", "burgers_"*string(now())*".jld2"), "w") do file
+    data_group = JLD2.Group(file, "data")
+    for property in propertynames(data)
+        data_group[string(property)] = getproperty(data, property)
+    end
+    
+    data_param_group = JLD2.Group(file, "data_parameters")
+    for data_param in [:random_seed, :polydeg, :Ncells, :Δtdyn, :Δtobs, :σx_data, :σy, :t0, :tf]
+        data_param_group[string(data_param)] = @eval($data_param)
+    end
+    
+    filter_param_group = JLD2.Group(file, "filter_parameters")
+    for filter_param in [:Ne, :Lrad, :σx_filter, :β_infl, :αk_f0, :L_f0]
+        filter_param_group[string(filter_param)] = @eval($filter_param)
+    end
+
+    GSBL_param_group = JLD2.Group(file, "GSBL_parameters")
+    for GSBL_param in [:order_PA, :Niter, :θinit, :dist]
+        GSBL_param_group[string(GSBL_param)] = @eval($GSBL_param)
+    end
+
+    metric_group = JLD2.Group(file, "metrics")
+    
+    for alg in ["locenkf", "hlocenkf"]
+        metric_subgroup = JLD2.Group(metric_group, alg)
+        for metric in ["rmse1", "crps1", "rmse2", "crps2", "mass_err", "energy_err"]
+            metric_symbol = Symbol(metric*"_"*alg)
+            metric_subgroup[metric] = @eval($metric_symbol)
+        end
+    end
+    
+    
+    filter_group = JLD2.Group(file, "filters")
+    filter_group["X_locenkf"] = ("Localized EnKF", X_locenkf)
+    filter_group["X_hlocenkf"] = ("Hierarchical Localized EnKF", X_hlocenkf)
+end;
 
 # %%
 make_figs && with_theme(my_theme) do
@@ -307,72 +343,37 @@ make_figs && with_theme(my_theme) do
 end;
 
 # %%
-mesh_weights = vec(sys_burgers.mesh.md.wJq);
+make_figs && with_theme(my_theme) do
+    t_start = 1
+    tsnap = Observable(t_start)
+    x_tsnap = @lift(data.xt[:, $tsnap])
+    y_tsnap = @lift(data.yt[:, $tsnap])
+    X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
+    X_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
+    cols = Makie.wong_colors()
 
-# %%
-weighted_norm2 = (x,w)-> sqrt( sum( dim_idx->w[dim_idx]*abs2(x[dim_idx]), eachindex(x,w) ) )
-rel_norms = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
+    fig = Figure()
 
-errs_locenkf2 = map(j -> CRPS(X_locenkf[j+1], @view(data.xt[:, j]), :norm2, mesh_weights), axes(data.xt, 2))
-errs_hlocenkf2 = map(j -> CRPS(X_hlocenkf[j+1], @view(data.xt[:, j]), :norm2, mesh_weights), axes(data.xt, 2))
+    ax1 = Axis(fig[1, 1], title="Localized EnKF")
 
-rmse2_locenkf, rmse2_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
-crps2_locenkf, crps2_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
-make_figs && @info "2-Norm results" rmse2_locenkf crps2_locenkf "======================" rmse2_hlocenkf crps2_hlocenkf;
-
-# %%
-weighted_norm1 = (x,w)-> sum( dim_idx->w[dim_idx]*abs(x[dim_idx]), eachindex(x,w) )
-rel_norms = map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
-
-errs_locenkf1 = map(j -> CRPS(X_locenkf[j+1], @view(data.xt[:, j]), :norm1, mesh_weights), axes(data.xt, 2))
-errs_hlocenkf1 = map(j -> CRPS(X_hlocenkf[j+1], @view(data.xt[:, j]), :norm1, mesh_weights), axes(data.xt, 2))
-
-rmse1_locenkf, rmse1_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
-crps1_locenkf, crps1_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err,rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
-make_figs && @info "1-Norm results" rmse1_locenkf crps1_locenkf "======================" rmse1_hlocenkf crps1_hlocenkf;
-
-# %%
-mass_true, energy_true = [weight_sum_reduction.(eachcol(data.xt), fcn, (mesh_weights,)) for fcn in (abs, abs2)]
-mass_locenkf, energy_locenkf = [reduce(hcat, weight_sum_reduction.(eachcol(x), fcn, (mesh_weights,)) for x in X_locenkf) for fcn in (abs, abs2)]
-mass_hlocenkf, energy_hlocenkf = [reduce(hcat, weight_sum_reduction.(eachcol(x), fcn, (mesh_weights,)) for x in X_hlocenkf) for fcn in (abs, abs2)]
-mass_err_locenkf, energy_err_locenkf = [mean(t_idx -> abs(mean(enkf[:,t_idx+1]) - truth[t_idx])/truth[t_idx], eachindex(truth)) for (truth, enkf) in [(mass_true, mass_locenkf), (energy_true, energy_locenkf)]]
-mass_err_hlocenkf, energy_err_hlocenkf = [mean(t_idx -> abs(mean(enkf[:,t_idx+1]) - truth[t_idx])/truth[t_idx], eachindex(truth)) for (truth, enkf) in [(mass_true, mass_hlocenkf), (energy_true, energy_hlocenkf)]]
-make_figs && @info "Summary stat results" mass_err_locenkf energy_err_locenkf "======================" mass_err_hlocenkf energy_err_hlocenkf;
-
-# %%
-jldopen(joinpath("data", "burgers_"*string(now())*".jld2"), "w") do file
-    data_group = JLD2.Group(file, "data")
-    for property in propertynames(data)
-        data_group[string(property)] = getproperty(data, property)
+    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
+    lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="LocEnKF")
+    lines!(ax1, xgrid, ys, linewidth=3, label="State")
+    for j in 1:Ne
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
     end
-    
-    data_param_group = JLD2.Group(file, "data_parameters")
-    for data_param in [:random_seed, :polydeg, :Ncells, :Δtdyn, :Δtobs, :σx_data, :σy, :t0, :tf]
-        data_param_group[string(data_param)] = @eval($data_param)
-    end
-    
-    filter_param_group = JLD2.Group(file, "filter_parameters")
-    for filter_param in [:Ne, :Lrad, :σx_filter, :β_infl, :αk_f0, :L_f0]
-        filter_param_group[string(filter_param)] = @eval($filter_param)
-    end
+    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
 
-    GSBL_param_group = JLD2.Group(file, "GSBL_parameters")
-    for GSBL_param in [:order_PA, :Niter, :θinit, :dist]
-        GSBL_param_group[string(GSBL_param)] = @eval($GSBL_param)
-    end
+    axislegend(ax1)
 
-    metric_group = JLD2.Group(file, "metrics")
-    
-    for alg in ["locenkf", "hlocenkf"]
-        metric_subgroup = JLD2.Group(metric_group, alg)
-        for metric in ["rmse1", "crps1", "rmse2", "crps2", "mass_err", "energy_err"]
-            metric_symbol = Symbol(metric*"_"*alg)
-            metric_subgroup[metric] = @eval($metric_symbol)
-        end
+
+    framerate = 10
+    timestamps = range(t_start, Tf, step=1)
+
+    anim = Makie.Record(fig, timestamps; framerate=framerate) do t
+        tsnap[] = t
     end
-    
-    
-    filter_group = JLD2.Group(file, "filters")
-    filter_group["X_locenkf"] = ("Localized EnKF", X_locenkf)
-    filter_group["X_hlocenkf"] = ("Hierarchical Localized EnKF", X_hlocenkf)
-end;
+    save("figs/assim_lenkf.mp4", anim)
+    anim
+end
+

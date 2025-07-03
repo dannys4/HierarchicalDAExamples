@@ -176,42 +176,6 @@ locenkf = LocEnKF(Ne, ϵy, sys_y, Loc, Δtdyn, Δtobs)
 # %%
 X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
-# %%
-make_figs && with_theme(my_theme) do
-    t_start = 3
-    tsnap = Observable(t_start)
-    cols = Makie.wong_colors()
-
-    x_tsnap = @lift(data.xt[:, $tsnap])
-    x_tsnap_plus = @lift(data.xt[:, $tsnap] .+ σx_filter)
-    y_tsnap = @lift(data.yt[:, $tsnap])
-    X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
-    X_locenkf_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
-
-    fig = Figure()
-
-    ax1 = Axis(fig[1, 1], title="Unadjusted EnKF")
-
-    lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
-    lines!(ax1, xgrid, x_tsnap_plus, linewidth=3, label="Truth+σ")
-    lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="EnKF")
-    for j in 1:Ne
-        lines!(ax1, xgrid, X_locenkf_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
-    end
-    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
-
-    axislegend(ax1)
-
-
-    framerate = 10
-    timestamps = range(t_start, Tf, step=1)
-
-    anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
-        tsnap[] = t
-    end
-    save("figs/assim_enkf.mp4", anim)
-    anim
-end
 
 # %% [markdown]
 # ### Parameters for GSBL
@@ -253,43 +217,6 @@ hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, θinit_vec, Δtdyn, Δtobs; Nite
 # %%
 X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
-# %%
-with_theme(my_theme) do
-    t_start = 4
-    tsnap = Observable(t_start)
-    x_tsnap = @lift(data.xt[:, $tsnap])
-    y_tsnap = @lift(data.yt[:, $tsnap])
-    X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
-    X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
-    theta_tsnap = @lift(θhist[$tsnap+1])
-    cols = Makie.wong_colors()
-
-    fig = Figure()
-
-    ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
-
-    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
-    lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
-    lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
-    # lines!(ax1, xgrid, ys, linewidth=3, label="State")
-    lines!(ax1, xgrid[PA_offset+1:end-PA_offset], theta_tsnap, linewidth=3, label="θ")
-    for j in 1:Ne
-        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
-    end
-    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
-
-    axislegend(ax1)
-
-
-    framerate = 10
-    timestamps = range(t_start, Tf, step=1)
-
-    anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
-        tsnap[] = t
-    end
-    save("figs/assim_hlenkf.mp4", anim)
-    anim
-end
 
 # %%
 mesh_weights = vec(sys_advection.mesh.md.wJq);
@@ -361,3 +288,79 @@ jldopen(joinpath("data", "linear_advection_"*string(now())*".jld2"), "w") do fil
     filter_group["X_locenkf"] = ("Localized EnKF", X_locenkf)
     filter_group["X_hlocenkf"] = ("Hierarchical Localized EnKF", X_hlocenkf)
 end;
+
+# %%
+make_figs && with_theme(my_theme) do
+    t_start = 4
+    tsnap = Observable(t_start)
+    x_tsnap = @lift(data.xt[:, $tsnap])
+    y_tsnap = @lift(data.yt[:, $tsnap])
+    X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
+    X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
+    theta_tsnap = @lift(θhist[$tsnap+1])
+    cols = Makie.wong_colors()
+
+    fig = Figure()
+
+    ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
+
+    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
+    lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
+    lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
+    # lines!(ax1, xgrid, ys, linewidth=3, label="State")
+    lines!(ax1, xgrid[PA_offset+1:end-PA_offset], theta_tsnap, linewidth=3, label="θ")
+    for j in 1:Ne
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+    end
+    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
+
+    axislegend(ax1)
+
+
+    framerate = 10
+    timestamps = range(t_start, Tf, step=1)
+
+    anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
+        tsnap[] = t
+    end
+    save("figs/assim_hlenkf.mp4", anim)
+    anim
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    t_start = 3
+    tsnap = Observable(t_start)
+    cols = Makie.wong_colors()
+
+    x_tsnap = @lift(data.xt[:, $tsnap])
+    x_tsnap_plus = @lift(data.xt[:, $tsnap] .+ σx_filter)
+    y_tsnap = @lift(data.yt[:, $tsnap])
+    X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
+    X_locenkf_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
+
+    fig = Figure()
+
+    ax1 = Axis(fig[1, 1], title="Unadjusted EnKF")
+
+    lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
+    lines!(ax1, xgrid, x_tsnap_plus, linewidth=3, label="Truth+σ")
+    lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="EnKF")
+    for j in 1:Ne
+        lines!(ax1, xgrid, X_locenkf_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+    end
+    scatter!(ax1, xgrid[1:Δy:end], y_tsnap)
+
+    axislegend(ax1)
+
+
+    framerate = 10
+    timestamps = range(t_start, Tf, step=1)
+
+    anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
+        tsnap[] = t
+    end
+    save("figs/assim_enkf.mp4", anim)
+    anim
+end
+
