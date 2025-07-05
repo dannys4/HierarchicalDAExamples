@@ -1,7 +1,9 @@
 #! /usr/bin/env python
 import argparse
-import shutil, os
-import subprocess, tqdm
+import shutil
+import os
+import subprocess
+import tqdm
 import copy
 
 parser = argparse.ArgumentParser(
@@ -10,7 +12,8 @@ parser = argparse.ArgumentParser(
     description='Run an example script for HierarchicalDA. Use "--" between number of trials and any parameters.',
 )
 
-examples = [name for name in os.listdir('.') if os.path.isdir(name) and not name.startswith('.')]
+examples = [name for name in os.listdir(
+    'examples') if os.path.isdir(name) and not name.startswith('.')]
 
 parser.add_argument('example',
                     help='Which example to run. Choose `test` to check the parameter sweep.',
@@ -29,8 +32,11 @@ parser.add_argument('parameters',
                     """,
                     nargs='*')
 
+
 def run_example(example, args):
-    subprocess.run(["julia", os.path.join(example,example+".jl"), *args])
+    subprocess.run(["julia", os.path.join(
+        "examples", example, example+".jl"), *args])
+
 
 def arg_matrix(args: list[str]):
     matrix = []
@@ -51,6 +57,7 @@ def arg_matrix(args: list[str]):
                 matrix.append(trial)
     return matrix
 
+
 if __name__ == '__main__':
     args = parser.parse_args()
     # Repeat each trial N times
@@ -62,6 +69,6 @@ if __name__ == '__main__':
         run_example(args.example, trials[0])
     else:
         print(f"Performing iterations 1,...,{N}!")
-        for (j,trial) in enumerate(trials):
+        for (j, trial) in enumerate(trials):
             print(f'Iteration {j+1}....')
             run_example(args.example, trial)
