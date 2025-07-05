@@ -29,24 +29,83 @@ using LinearMaps
 using TransportBasedInference2
 using Distributions
 using SparseArrays
+using Random
 
 # %%
+data_path = joinpath(@__DIR__, "data")
+make_figs = false
 my_theme = theme_latexfonts()
-
-# %%
 update_theme!(my_theme, linewidth=3.)
+random_seed = rand(UInt)
 
-# %%
-equations = CompressibleEulerEquations1D(1.4)
+# %% [markdown]
+# ### Data generating parameters
 
 # %%
 polydeg = 2
 Ncells = 200
 Nvar = 3
 
+Δtdyn = 0.02
+Δtobs = 0.04
+
+t0 = 0.0
+tf = 2.0
+
+Δy = 100
+density_thresh, pressure_thresh = 5e-6, 5e-6
+σy = 0.1
+σx_data = 0.0#Δtobs*1.0
+
+# %% [markdown]
+# ### EnKF Parameters
+
+# %%
+αk_f0, L_f0 = 1.0, 10.0
+σx_filter = 0.02
+β_infl = 1.00
+Lrad = 7
+Ne = 40
+cfl = 0.9
+
+# %% [markdown]
+# ### GSBL parameters
+
+# %%
+order_PA = 3
+hyperprior_idx = 4
+theta_init = 1.0
+Niter = 5
+
+# %%
+# Assign any given arguments
+isdefined(Main, :IJulia) || (length(ARGS) > 0 && @info "Given arguments: " ARGS)
+isdefined(Main, :IJulia) || for arg in ARGS
+    key, val = split(arg, "=")
+    sym_key = Symbol(key)
+    val_T = @eval($sym_key)
+    pre_val_type = typeof(val_T)
+    is_err = false
+    try
+        val_T = parse(pre_val_type, val)
+    catch e
+        is_err = true
+    end
+    if is_err
+        @error "Could not parse value in $key=$val to type $pre_val_type"
+        val_T = parse(pre_val_type, val)
+    end
+    @eval($sym_key = $val_T)
+end;
+
+# %%
+Random.seed!(random_seed);
+
+# %%
+equations = CompressibleEulerEquations1D(1.4)
+
 Nxvar = (polydeg + 1) * Ncells
 Nx = Nvar * Nxvar
-Δy = 100
 
 Nyvar = ceil(Int64, Nxvar / Δy)
 Ny = Nvar * Nyvar
@@ -57,9 +116,8 @@ sys_euler = setup_euler(polydeg, Ncells);
 xgrid = GridFromMesh(sys_euler);
 
 # %%
-order_PA = 3
-
-Nsvar = Nxvar - 2 * ceil(Int64, order_PA / 2)
+PA_skip = ceil(Int64, order_PA / 2)
+Nsvar = Nxvar - 2 * PA_skip
 Ns = Nvar * Nsvar
 
 PA = PolyAnnil(xgrid, order_PA; Nvar=Nvar, istruncated=true)
@@ -80,28 +138,17 @@ idxρy = 1:ceil(Int64, Nx / (Δy * Nvar))
 idxvy = ceil(Int64, Nx / (Δy * Nvar)) .+ collect(1:ceil(Int64, Nx / (Δy * Nvar)))
 idxpy = 2 * ceil(Int64, Nx / (Δy * Nvar)) .+ collect(1:ceil(Int64, Nx / (Δy * Nvar)))
 
-idxρs = idxρ[ceil(Int64, order_PA / 2)+1:end-ceil(Int64, order_PA / 2)]
-idxvs = idxv[ceil(Int64, order_PA / 2)+1:end-ceil(Int64, order_PA / 2)]
-idxps = idxp[ceil(Int64, order_PA / 2)+1:end-ceil(Int64, order_PA / 2)];
+idxρs = idxρ[PA_skip+1:end-PA_skip]
+idxvs = idxv[PA_skip+1:end-PA_skip]
+idxps = idxp[PA_skip+1:end-PA_skip];
 
 # %%
-Δtdyn = 0.02
-Δtobs = 0.04
-
-t0 = 0.0
-Tf = 50
-Tspin = 1000
-tf = t0 + Tf * Δtobs
+Tf = round(Int, (tf - t0)/Δtobs)
 
 π0 = MvNormal(zeros(Nx), Matrix(1.0 * I, Nx, Nx))
 
 # %%
-σx_true = 0.0#Δtobs*1.0
-@show σx_true
-
-σy = 0.1
-
-ϵx_true = AdditiveInflation(Nx, zeros(Nx), σx_true)
+ϵx_true = AdditiveInflation(Nx, zeros(Nx), σx_data)
 ϵx_filter = AdditiveInflation(Nx, zeros(Nx), σx_filter)
 
 ϵy = AdditiveInflation(Ny, zeros(Ny), σy);
@@ -114,8 +161,7 @@ F = StateSpace(x -> x, h)
 model = Model(Nx, Ny, Δtdyn, Δtobs, ϵx_true, ϵy, π0, 0, 0, 0, F);
 
 # Define function class for the initial condition
-αk = 1.0
-f0 = SmoothPeriodic(xgrid, αk; L=10.0, Nvar=Nvar)
+f0 = SmoothPeriodic(xgrid, αk_f0; L=L_f0, Nvar=Nvar)
 
 # %%
 xshuosher = zeros(Nx)
@@ -131,20 +177,28 @@ end
 x0 = xshuosher;# + 0.01*f0(xgrid);
 
 # %%
-thresholds = (5e-6, 5e-6)
+thresholds = (density_thresh, pressure_thresh)
 variables = (Trixi.density, Trixi.pressure)
 stage_limiter! = PositivityPreservingLimiterZhangShu(thresholds=thresholds,
     variables=variables)
 ode_solver = SSPRK43(stage_limiter!)
-# ode_solver = SSPRK43()
-# ode_solver = RDPK3SpFSAL49(stage_limiter!)
-# ode_solver = CarpenterKennedy2N54(stage_limiter!, williamson_condition=false)
 
 # %%
 data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, cfl=0.9)
 
 # %%
-false && with_theme(my_theme) do
+quad_wts = vec(sys_euler.mesh.md.wJq)
+ents = zeros(size(data.xt,2))
+for (t,x) in enumerate(eachcol(data.xt))
+    u_state = reshape(x,:,3)
+    ents[t] =quad_wts'map(u->Trixi.entropy(vec(u), sys_euler.equations), eachrow(u_state))
+end
+
+# %%
+make_figs && display(lines(data.tt,ents, axis=(;title="Entropy of Shu-Osher shock", xlabel=L"t", ylabel=L"e")));
+
+# %%
+make_figs && with_theme(my_theme) do
     fig = Figure()
     ax = Axis(fig[1, 1], title="Initial Condition", ylabel=L"u(0,x)", xlabel=L"x")
     xgrid = -5:0.01:5
@@ -153,11 +207,12 @@ false && with_theme(my_theme) do
     lines!(xgrid, u0[2, :], label=L"\rho v_1")
     lines!(xgrid, u0[3, :], label=L"\rho e")
     axislegend()
-    fig
-end
+    save(joinpath(@__DIR__, "figs", "initial_condition.pdf"))
+    display(fig)
+end;
 
 # %%
-with_theme(my_theme) do
+make_figs && with_theme(my_theme) do
     N_T = length(data.tt)
     p_t = t -> data.xt[idxps, t]
     ρ_t = t -> data.xt[idxρs, t]
@@ -180,12 +235,12 @@ with_theme(my_theme) do
     anim = CairoMakie.Makie.Record(fig, timestamps; framerate=N_T ÷ 4) do t
         time[] = t
     end
-    save("figs/solution.mp4", anim)
-    anim
-end
+    save(joinpath(@__DIR__,"figs","solution.mp4"), anim)
+    display(anim)
+end;
 
 # %%
-with_theme(my_theme) do
+make_figs && with_theme(my_theme) do
     fig = Figure(size=(2100, 700))
     for (i, idx_i) in enumerate([(idxρ, idxρy), (idxv, idxvy), (idxp, idxpy)])
         idx_x, idx_y = idx_i
@@ -197,29 +252,25 @@ with_theme(my_theme) do
         scatter!(axi, xgrid[1:Δy:end], data.yt[idx_y, div(end, 3)], markersize=18)
         errorbars!(axi, xgrid[1:Δy:end], data.yt[idx_y, div(end, 3)], fill(2σy, length(idx_y)))
     end
-    fig
-end
+    save(joinpath(@__DIR__,"figs","time_slices.pdf"), fig)
+    display(fig)
+end;
 
 # %%
-idx = 4
 ## Selecion of hyper-prior parameters
 # power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
-r = r_range[idx] # select parameter 
+r_GSBL = r_range[hyperprior_idx] # select parameter 
 # shape parameter
 β_range = [1.501, 3.0918, 2.0165, 1.0017];
-β = β_range[idx] # shape parameter
+β_GSBL = β_range[hyperprior_idx] # shape parameter
 # rate parameters 
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
-ϑ = ϑ_range[idx]
+ϑ_GSBL = ϑ_range[hyperprior_idx]
 
-# r = -0.5
-# β = 0.5
-# ϑ = 0.01
-dist = GeneralizedGamma(r, β, ϑ);
+dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
-Ne = 40
 X = zeros(model.Ny + model.Nx, Ne)
 
 for i = 1:Ne
@@ -228,10 +279,8 @@ for i = 1:Ne
 end
 
 # %%
-θinit = rand(dist, Ns);
-
-# %%
-Cθ = LinearMap(Diagonal(deepcopy(θinit)))
+theta_init_vec = fill(theta_init, Ns)
+Cθ = LinearMap(Diagonal(theta_init_vec))
 Cϵ = LinearMap(ϵy.Σ)
 CX = LinearMap(I(Nx))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX)
@@ -243,32 +292,50 @@ sys_y = ObsSystem(H, Cϵ, CX)
 yidx = 1:Δy:Nx
 idx = vcat(collect(1:length(yidx))', collect(yidx)')
 
-# @assert length(yidx) == Ny
-
 # # Create Localization structure
 Gxx(i, j) = periodicmetric!(mod(i, Nxvar) - 1, mod(j, Nxvar) - 1, Nxvar)
 Gxy(i, j) = periodicmetric!(i, yidx[j], Nxvar)
 Gyy(i, j) = periodicmetric!(yidx[i], yidx[j], Nxvar)
 
-Lrad = 7
 Loc = Localization(Lrad, Gxx, Gxy, Gxx)
+filter_inflation = MultiAddInflation(Nx, β_infl, zeros(Nx), σx_filter)
 
 # %%
-σx_filter = 0.02
-β = 1.00
-filter_inflation = MultiAddInflation(Nx, β, zeros(Nx), σx_filter)
+locenkf = LocEnKF(x->max.(x, 1e-6), Ne, ϵy, sys_y, Loc, Δtdyn, Δtobs, isfiltered=true)
 
 # %%
-locenkf = LocEnKF(x -> max.((1e-4,), x), Ne, ϵy, sys_y, Loc, Δtdyn, Δtobs, isfiltered=true)
+X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl);
 
 # %%
-X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl=0.9);
+hlocenkf = HLocEnKF(x->max.(x, 1e-6), Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, Δtdyn, Δtobs; Niter, θinit=theta_init, isfiltered=true)
 
 # %%
-hlocenkf = HLocEnKF(x -> max.((1e-4,), x), Ne, ϵy, sys_ys, Loc, dist, deepcopy(θinit), Δtdyn, Δtobs, Niter=5, θinit=1., isfiltered=true)
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl);
 
 # %%
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl=0.9);
+mesh_weights = vec(sys_burgers.mesh.md.wJq);
+
+# %%
+weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
+rel_norms = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
+
+errs_locenkf2 = map(j -> CRPS(X_locenkf[j+1], @view(data.xt[:, j]), :norm2, mesh_weights), axes(data.xt, 2))
+errs_hlocenkf2 = map(j -> CRPS(X_hlocenkf[j+1], @view(data.xt[:, j]), :norm2, mesh_weights), axes(data.xt, 2))
+
+rmse2_locenkf, rmse2_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
+crps2_locenkf, crps2_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
+make_figs && @info "2-Norm results" rmse2_locenkf crps2_locenkf "======================" rmse2_hlocenkf crps2_hlocenkf;
+
+# %%
+weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
+rel_norms = map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
+
+errs_locenkf1 = map(j -> CRPS(X_locenkf[j+1], @view(data.xt[:, j]), :norm1, mesh_weights), axes(data.xt, 2))
+errs_hlocenkf1 = map(j -> CRPS(X_hlocenkf[j+1], @view(data.xt[:, j]), :norm1, mesh_weights), axes(data.xt, 2))
+
+rmse1_locenkf, rmse1_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
+crps1_locenkf, crps1_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
+make_figs && @info "1-Norm results" rmse1_locenkf crps1_locenkf "======================" rmse1_hlocenkf crps1_hlocenkf;
 
 # %%
 function __RMSE(X_ens::AbstractMatrix, x::AbstractVector)

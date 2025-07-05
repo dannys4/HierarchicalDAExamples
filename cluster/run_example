@@ -23,7 +23,7 @@ parser.add_argument('-n', '--number',
 
 parser.add_argument('parameters',
                     help="""
-                    parameters to pass onto the simulation (e.g., sigma_x_data, sigma_y, delta_t_obs, etc.).
+                    parameters to pass onto the simulation (e.g., data_path, sigma_x_data, sigma_y, delta_t_obs, etc.).
 
                     For making an matrix of different parameters, separate them by commas.
                     """,

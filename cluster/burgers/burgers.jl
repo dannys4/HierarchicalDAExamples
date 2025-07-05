@@ -36,11 +36,12 @@ using Dates
 using Random
 
 # %%
+# Logistics
 make_figs = false
-my_theme = Theme()
-
-# %%
+my_theme = theme_latexfonts()
+update_theme!(my_theme, linewidth=3.)
 random_seed = rand(UInt)
+data_path = joinpath(@__DIR__, "data")
 
 # %%
 # Problem setup params
@@ -73,8 +74,8 @@ hyperprior_idx = 3
 
 # %%
 # Assign any given arguments
-length(ARGS) > 0 && @info "Given arguments: " ARGS
-for arg in ARGS
+isdefined(Main, :IJulia) || length(ARGS) > 0 && @info "Given arguments: " ARGS
+isdefined(Main, :IJulia) || for arg in ARGS
     key, val = split(arg, "=")
     sym_key = Symbol(key)
     val_T = @eval($sym_key)
@@ -126,6 +127,14 @@ x0 = vec(1 / 2 .+ 0.5 * sin.(3 * π * sys_burgers.mesh.md.xq));
 # %%
 @info "Generating data..."
 data = generate_data_trixi(model, x0, Tf, sys_burgers)
+
+# %%
+# CALCULATE ENTROPY
+mesh_wts = vec(sys_burgers.mesh.md.wJq)
+ents = [mesh_wts'Trixi.entropy.(x, (sys_burgers.equations,)) for x in eachcol(data.xt)]
+
+# %%
+lines(ents)
 
 # %%
 make_figs && heatmap(delta_t_obs * (1:Tf), xgrid, data.xt', axis=(; xlabel=L"t", ylabel=L"x", title=L"Solution of inviscid burgers, $u(x,t)$"))
@@ -260,7 +269,7 @@ mass_err_hlocenkf, energy_err_hlocenkf = [mean(t_idx -> abs(mean(enkf[:, t_idx+1
 make_figs && @info "Summary stat results" mass_err_locenkf energy_err_locenkf "======================" mass_err_hlocenkf energy_err_hlocenkf;
 
 # %%
-jldopen(joinpath(@__DIR__, "data", "burgers_" * string(now()) * ".jld2"), "w") do file
+jldopen(joinpath(data_path, "burgers_" * string(now()) * ".jld2"), "w") do file
     data_group = JLD2.Group(file, "data")
     for property in propertynames(data)
         data_group[string(property)] = getproperty(data, property)

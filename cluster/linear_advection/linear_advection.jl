@@ -83,8 +83,8 @@ Niter = 5
 
 # %%
 # Assign any given arguments
-length(ARGS) > 0 && @info "Given arguments: " ARGS
-for arg in ARGS
+isdefined(Main, :IJulia) || length(ARGS) > 0 && @info "Given arguments: " ARGS
+isdefined(Main, :IJulia) || for arg in ARGS
     key, val = split(arg, "=")
     sym_key = Symbol(key)
     val_T = @eval($sym_key)
