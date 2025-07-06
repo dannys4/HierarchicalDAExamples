@@ -1,5 +1,6 @@
 [deps]
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
@@ -16,10 +17,10 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 TransportBasedInference2 = "1fffb988-1a3a-4757-b9a7-a23a87666c1e"
 Trixi = "a7f1ee26-1774-49b1-8366-f1abc58fbfcb"
 
-[compat]
-julia = "1.11"
-HierarchicalDA = "0.1.1"
-
 [sources]
-HierarchicalDA = { url = "https://github.com/dannys4/2025_GSBL_DA_dev", rev="dannys4/pkg"}
-TransportBasedInference2 = { url = "https://github.com/dannys4/TransportBasedInference2.jl", rev="main"}
+HierarchicalDA = {rev = "dannys4/pkg", url = "https://github.com/dannys4/2025_GSBL_DA_dev"}
+TransportBasedInference2 = {rev = "main", url = "https://github.com/dannys4/TransportBasedInference2.jl"}
+
+[compat]
+HierarchicalDA = "0.1.1"
+julia = "1.11"

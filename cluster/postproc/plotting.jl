@@ -14,6 +14,9 @@
 # ---
 
 # %%
+using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie
+
+# %%
 names(df)
 
 # %%
