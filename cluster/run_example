@@ -12,8 +12,8 @@ parser = argparse.ArgumentParser(
     description='Run an example script for HierarchicalDA. Use "--" between number of trials and any parameters.',
 )
 
-examples = [name for name in os.listdir(
-    'examples') if os.path.isdir(name) and not name.startswith('.')]
+examples = [name[:-3] for name in os.listdir(
+    'examples') if name.endswith('.jl')]
 
 parser.add_argument('example',
                     help='Which example to run. Choose `test` to check the parameter sweep.',
@@ -30,7 +30,8 @@ parser.add_argument('parameters',
 
                     For making an matrix of different parameters, separate them by commas.
                     """,
-                    nargs='*')
+                    nargs='*',
+                    default=[])
 
 
 def run_example(example, args):
@@ -61,10 +62,11 @@ def arg_matrix(args: list[str]):
 if __name__ == '__main__':
     args = parser.parse_args()
     # Repeat each trial N times
-    trials = arg_matrix(args.parameters)*args.number
+    matrix = arg_matrix(args.parameters)
+    trials = (matrix if len(matrix) > 0 else [[]])*args.number
     N = len(trials)
     if N < 1:
-        raise ValueError("N must be >= 1, received " + str(N))
+        raise ValueError(f"n must be >= 1, received {N}")
     elif N == 1:
         run_example(args.example, trials[0])
     else:
