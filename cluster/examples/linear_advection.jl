@@ -39,6 +39,7 @@ using Trixi: entropy2cons
 
 # %%
 make_figs = false
+data_path = joinpath(@__DIR__, "data")
 my_theme = Theme()
 
 # %%
@@ -91,12 +92,12 @@ isdefined(Main, :IJulia) || for arg in ARGS
     pre_val_type = typeof(val_T)
     is_err = false
     try
-        val_T = parse(pre_val_type, val)
+        val_T = pre_val_type == String ? string(val) : parse(pre_val_type, val)
     catch e
         is_err = true
     end
     if is_err
-        @error "Could not parse value in $key=$val to type $pre_val_type"
+        @error "Could not parse value in $key=$val, type $(typeof(val)), to type $pre_val_type"
         val_T = parse(pre_val_type, val)
     end
     @eval($sym_key = $val_T)
@@ -276,7 +277,7 @@ mass_err_hlocenkf, energy_err_hlocenkf = [mean(t_idx -> abs(mean(enkf[:, t_idx+1
 make_figs && @info "Summary stat results" mass_err_locenkf energy_err_locenkf "======================" mass_err_hlocenkf energy_err_hlocenkf;
 
 # %%
-jldopen(joinpath(@__DIR__, "data", "linear_advection_" * string(now()) * ".jld2"), "w") do file
+jldopen(joinpath(data_path, "linear_advection_" * string(now()) * ".jld2"), "w") do file
     data_group = JLD2.Group(file, "data")
     for property in propertynames(data)
         data_group[string(property)] = getproperty(data, property)

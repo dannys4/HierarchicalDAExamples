@@ -79,7 +79,7 @@ Niter = 5
 
 # %%
 # Assign any given arguments
-isdefined(Main, :IJulia) || (length(ARGS) > 0 && @info "Given arguments: " ARGS)
+isdefined(Main, :IJulia) || length(ARGS) > 0 && @info "Given arguments: " ARGS
 isdefined(Main, :IJulia) || for arg in ARGS
     key, val = split(arg, "=")
     sym_key = Symbol(key)
@@ -87,16 +87,16 @@ isdefined(Main, :IJulia) || for arg in ARGS
     pre_val_type = typeof(val_T)
     is_err = false
     try
-        val_T = parse(pre_val_type, val)
+        val_T = pre_val_type == String ? string(val) : parse(pre_val_type, val)
     catch e
         is_err = true
     end
     if is_err
-        @error "Could not parse value in $key=$val to type $pre_val_type"
+        @error "Could not parse value in $key=$val, type $(typeof(val)), to type $pre_val_type"
         val_T = parse(pre_val_type, val)
     end
     @eval($sym_key = $val_T)
-end;
+end
 
 # %%
 Random.seed!(random_seed);
@@ -143,7 +143,7 @@ idxvs = idxv[PA_skip+1:end-PA_skip]
 idxps = idxp[PA_skip+1:end-PA_skip];
 
 # %%
-Tf = round(Int, (tf - t0)/Δtobs)
+Tf = round(Int, (tf - t0) / Δtobs)
 
 π0 = MvNormal(zeros(Nx), Matrix(1.0 * I, Nx, Nx))
 
@@ -188,14 +188,14 @@ data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler
 
 # %%
 quad_wts = vec(sys_euler.mesh.md.wJq)
-ents = zeros(size(data.xt,2))
-for (t,x) in enumerate(eachcol(data.xt))
-    u_state = reshape(x,:,3)
-    ents[t] =quad_wts'map(u->Trixi.entropy(vec(u), sys_euler.equations), eachrow(u_state))
+ents = zeros(size(data.xt, 2))
+for (t, x) in enumerate(eachcol(data.xt))
+    u_state = reshape(x, :, 3)
+    ents[t] = quad_wts'map(u -> Trixi.entropy(vec(u), sys_euler.equations), eachrow(u_state))
 end
 
 # %%
-make_figs && display(lines(data.tt,ents, axis=(;title="Entropy of Shu-Osher shock", xlabel=L"t", ylabel=L"e")));
+make_figs && display(lines(data.tt, ents, axis=(; title="Entropy of Shu-Osher shock", xlabel=L"t", ylabel=L"e")));
 
 # %%
 make_figs && with_theme(my_theme) do
@@ -235,7 +235,7 @@ make_figs && with_theme(my_theme) do
     anim = CairoMakie.Makie.Record(fig, timestamps; framerate=N_T ÷ 4) do t
         time[] = t
     end
-    save(joinpath(@__DIR__,"figs","solution.mp4"), anim)
+    save(joinpath(@__DIR__, "figs", "solution.mp4"), anim)
     display(anim)
 end;
 
@@ -252,7 +252,7 @@ make_figs && with_theme(my_theme) do
         scatter!(axi, xgrid[1:Δy:end], data.yt[idx_y, div(end, 3)], markersize=18)
         errorbars!(axi, xgrid[1:Δy:end], data.yt[idx_y, div(end, 3)], fill(2σy, length(idx_y)))
     end
-    save(joinpath(@__DIR__,"figs","time_slices.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "time_slices.pdf"), fig)
     display(fig)
 end;
 
@@ -301,13 +301,13 @@ Loc = Localization(Lrad, Gxx, Gxy, Gxx)
 filter_inflation = MultiAddInflation(Nx, β_infl, zeros(Nx), σx_filter)
 
 # %%
-locenkf = LocEnKF(x->max.(x, 1e-6), Ne, ϵy, sys_y, Loc, Δtdyn, Δtobs, isfiltered=true)
+locenkf = LocEnKF(x -> max.(x, 1e-6), Ne, ϵy, sys_y, Loc, Δtdyn, Δtobs, isfiltered=true)
 
 # %%
 X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl);
 
 # %%
-hlocenkf = HLocEnKF(x->max.(x, 1e-6), Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, Δtdyn, Δtobs; Niter, θinit=theta_init, isfiltered=true)
+hlocenkf = HLocEnKF(x -> max.(x, 1e-6), Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, Δtdyn, Δtobs; Niter, θinit=theta_init, isfiltered=true)
 
 # %%
 X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl);

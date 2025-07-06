@@ -82,12 +82,12 @@ isdefined(Main, :IJulia) || for arg in ARGS
     pre_val_type = typeof(val_T)
     is_err = false
     try
-        val_T = parse(pre_val_type, val)
+        val_T = pre_val_type == String ? string(val) : parse(pre_val_type, val)
     catch e
         is_err = true
     end
     if is_err
-        @error "Could not parse value in $key=$val to type $pre_val_type"
+        @error "Could not parse value in $key=$val, type $(typeof(val)), to type $pre_val_type"
         val_T = parse(pre_val_type, val)
     end
     @eval($sym_key = $val_T)
