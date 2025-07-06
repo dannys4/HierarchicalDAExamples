@@ -35,7 +35,7 @@ parser.add_argument('parameters',
 
 def run_example(example, args):
     subprocess.run(["julia", os.path.join(
-        "examples", example, example+".jl"), *args])
+        "examples", example+".jl"), *args])
 
 
 def arg_matrix(args: list[str]):
