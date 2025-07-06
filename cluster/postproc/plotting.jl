@@ -76,12 +76,17 @@ fixed_vals = filter(val -> sum(df_cut[!, fixed_key] .== val) > 50, unique(df_cut
 fixed_val = fixed_vals[2]
 n_row = floor(Int, sqrt(length(fixed_vals)))
 fixed_val_pos = [val => (((idx - 1) ÷ n_row) + 1, mod1(idx, n_row)) for (idx, val) in enumerate(fixed_vals)]
+function get_ylabel(y_axis)
+    metric = match(r"^[a-z]*", string(y_axis)).match
+    upper_fcn = metric in ["crps", "rmse"] ? uppercase : uppercasefirst
+    upper_fcn(metric) * ", log-scale"
+end
 
 # %%
 xticks = [(val, string(val)) for val in [0.01, 0.025, 0.05, 0.1]]
 xminorticks = 0.01 * (1:0.5:10)
 with_theme(theme_latexfonts(), Axis=(
-    aspect=1, xlabel=L"$\sigma_x$, log-scale", ylabel="RMSE, log-scale",
+    aspect=1, xlabel=L"$\sigma_x$, log-scale", ylabel=get_ylabel(y_axis),
     xscale=log10, yscale=log10,
     xticks=first.(xticks),
     xticklabels=last.(xticks),
@@ -101,13 +106,13 @@ with_theme(theme_latexfonts(), Axis=(
         _, _, delta, alg = split(label)
         alg_name = alg == "locenkf" ? "EnKF" : "GSBL"
         delta = delta[1:end-1]
-        L"%$alg_name, $\delta y$ = %$delta"
+        L"%$alg_name, $\Delta y$ = %$delta"
     end
     leg = Legend(
         gl_legend[1, 1:2], plots_v, proc_label.(labels_v),
         patchsize=(50, 20), orientation=:horizontal)
     leg.nbanks = 2
-    save(joinpath(@__DIR__, "figs", "convergence.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "$(y_axis)_convergence.pdf"), fig)
     fig
 end
 
