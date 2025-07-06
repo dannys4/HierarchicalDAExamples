@@ -17,16 +17,15 @@
 using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie
 
 # %%
-names(df)
+data_path = joinpath(@__DIR__, "data")
+filename = "burgers_df.jld2"
+
+# %%
+@load joinpath(data_path, filename) df
+
 
 # %%
 df_cut = select(df, filter(j -> names(df)[j] != "random_seed" && length(unique(df[:, j])) > 1, axes(df, 2)))
-
-# %%
-df_g = groupby(df_cut, ["Ne", "delta_y", "algorithm", "sigma_x_filter"])
-
-# %%
-unique(df[!, :Ne])
 
 # %%
 function plot_convergence!(ax, df, fixed_key, fixed_val, x_axis, y_axis, marker_diffs, line_style, cols=Makie.wong_colors())
@@ -47,6 +46,7 @@ function plot_convergence!(ax, df, fixed_key, fixed_val, x_axis, y_axis, marker_
     )
     sort!(df_filter_metrics, x_axis)
     df_metrics_g = groupby(df_filter_metrics, [marker_diffs, line_style])
+
     plots_v, labels_v = [], []
     for (key, subdf) in pairs(df_metrics_g)
         md, ls = getproperty.((key,), [marker_diffs, line_style])
@@ -56,27 +56,59 @@ function plot_convergence!(ax, df, fixed_key, fixed_val, x_axis, y_axis, marker_
         label = "$marker_diffs = $md, $ls"
         li = lines!(ax, subdf[!, x_axis], subdf[!, :mid], linewidth=3; linestyle, color)
         sc = scatter!(ax, subdf[!, x_axis], subdf[!, :mid], markersize=18; marker, color)
+        err_lo = subdf[!, :mid] - subdf[!, :lo]
+        err_hi = subdf[!, :hi] - subdf[!, :mid]
+        errorbars!(ax, subdf[!, x_axis], subdf[!, :mid], err_lo, err_hi; color, whiskerwidth=10)
         push!(labels_v, label)
         push!(plots_v, [li, sc])
     end
     plots_v, labels_v
 end
 
-cols = Makie.wong_colors()
-
+# %%
 fixed_key = :Ne
 x_axis = :sigma_x_filter
 y_axis = :rmse2
 marker_diffs = :delta_y
 line_style = :algorithm
 
-fixed_vals = unique(df_cut[!, fixed_key])
+fixed_vals = filter(val -> sum(df_cut[!, fixed_key] .== val) > 50, unique(df_cut[!, fixed_key]))
+fixed_val = fixed_vals[2]
 n_row = floor(Int, sqrt(length(fixed_vals)))
+fixed_val_pos = [val => (((idx - 1) ÷ n_row) + 1, mod1(idx, n_row)) for (idx, val) in enumerate(fixed_vals)]
 
-fig = Figure(size=(800, 500))
-ax = Axis(fig[1, 1], aspect=1., xlabel=string(x_axis), ylabel=string(y_axis), title="$fixed_key = $fixed_val")
-plots_v, labels_v = plot_convergence!(ax, df_cut, fixed_key, fixed_val, x_axis, y_axis, marker_diffs, line_style)
-Legend(fig[1, 2], plots_v, labels_v, patchsize=(35, 35))
-fig
+# %%
+xticks = [(val, string(val)) for val in [0.01, 0.025, 0.05, 0.1]]
+xminorticks = 0.01 * (1:0.5:10)
+with_theme(theme_latexfonts(), Axis=(
+    aspect=1, xlabel=L"$\sigma_x$, log-scale", ylabel="RMSE, log-scale",
+    xscale=log10, yscale=log10,
+    xticks=first.(xticks),
+    xticklabels=last.(xticks),
+    xminorticks=xminorticks, xminorticksvisible=true)) do
+
+    fig = Figure(size=(800, 900))
+    gl_plot = fig[1:2, 1:2] = GridLayout()
+    gl_legend = fig[3, 1:2] = GridLayout()
+    # ax = Axis(fig[1, 1], aspect=1., xlabel=string(x_axis), ylabel=string(y_axis), title="$fixed_key = $fixed_val")
+    plots_v = labels_v = nothing
+    for (fixed_val, ax_pos) in fixed_val_pos
+        ax = Axis(gl_plot[ax_pos...], title="Ensemble size $fixed_val")
+        ax.xminorticks = xminorticks
+        plots_v, labels_v = plot_convergence!(ax, df_cut, fixed_key, fixed_val, x_axis, y_axis, marker_diffs, line_style)
+    end
+    function proc_label(label)
+        _, _, delta, alg = split(label)
+        alg_name = alg == "locenkf" ? "EnKF" : "GSBL"
+        delta = delta[1:end-1]
+        L"%$alg_name, $\delta y$ = %$delta"
+    end
+    leg = Legend(
+        gl_legend[1, 1:2], plots_v, proc_label.(labels_v),
+        patchsize=(50, 20), orientation=:horizontal)
+    leg.nbanks = 2
+    save(joinpath(@__DIR__, "figs", "convergence.pdf"), fig)
+    fig
+end
 
 # %%

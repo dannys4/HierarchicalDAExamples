@@ -5,6 +5,7 @@ Manifest.toml
 *.gif
 *.mp4
 *.png
+*.pdf
 
 # Data
 *.jld2
