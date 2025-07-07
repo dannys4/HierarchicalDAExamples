@@ -1,0 +1,11 @@
+services:
+  hierarchical_data_assimilation:
+    platform: "linux/amd64"
+    build:
+      context: .
+    container_name: HDA
+    ports:
+      - "1234:1234"
+    volumes:
+      - ".:/root/cluster"
+    command: tail -f /dev/null
