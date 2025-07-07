@@ -16,7 +16,7 @@
 
 # %%
 using Pkg
-proj_path = joinpath(@__DIR__, "..", "..")
+proj_path = joinpath(@__DIR__, "..")
 Pkg.activate(proj_path)
 
 # %%
@@ -25,12 +25,11 @@ using HierarchicalDA
 using LinearAlgebra
 using OrdinaryDiffEq
 using Trixi
-using FFTW
 using Distributions
 using Statistics
 using SparseArrays
 using LinearMaps
-using CairoMakie
+# using CairoMakie
 using JLD2
 using Dates
 using Random
@@ -40,7 +39,7 @@ using Trixi: entropy2cons
 # %%
 make_figs = false
 data_path = joinpath(@__DIR__, "data")
-my_theme = Theme()
+#my_theme = Theme()
 
 # %%
 random_seed = rand(UInt)
@@ -58,7 +57,7 @@ coordinates_min, coordinates_max = -1., 1.
 delta_y = 50
 delta_t_dyn = 0.05
 delta_t_obs = 0.25
-t0, tf = 0.0, 25.0
+t0, tf = 0.0, 1.0
 sigma_x_data = 1e-5
 sigma_y = 0.2
 
@@ -284,7 +283,7 @@ jldopen(joinpath(data_path, "linear_advection_" * string(now()) * ".jld2"), "w")
     end
 
     data_param_group = JLD2.Group(file, "data_parameters")
-    for data_param in [:random_seed, :polydeg, :Ncells, :delta_t_dyn, :delta_t_obs, :sigma_x_data, :sigma_y, :t0, :tf]
+    for data_param in [:random_seed, :polydeg, :Ncells, :delta_t_dyn, :delta_t_obs, :sigma_x_data, :sigma_y, :t0, :tf, :delta_y]
         data_param_group[string(data_param)] = @eval($data_param)
     end
 
@@ -318,11 +317,11 @@ end;
 make_figs && with_theme(my_theme) do
     t_start = 4
     tsnap = Observable(t_start)
-    x_tsnap = @lift(data.xt[:, $tsnap])
-    y_tsnap = @lift(data.yt[:, $tsnap])
-    X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
-    X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
-    theta_tsnap = @lift(θhist[$tsnap+1])
+    #x_tsnap = @lift(data.xt[:, $tsnap])
+    #y_tsnap = @lift(data.yt[:, $tsnap])
+    #X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
+    #X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
+    #theta_tsnap = @lift(θhist[$tsnap+1])
     cols = Makie.wong_colors()
 
     fig = Figure()
@@ -358,11 +357,11 @@ make_figs && with_theme(my_theme) do
     tsnap = Observable(t_start)
     cols = Makie.wong_colors()
 
-    x_tsnap = @lift(data.xt[:, $tsnap])
-    x_tsnap_plus = @lift(data.xt[:, $tsnap] .+ sigma_x_filter)
-    y_tsnap = @lift(data.yt[:, $tsnap])
-    X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
-    X_locenkf_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
+    #x_tsnap = @lift(data.xt[:, $tsnap])
+    #x_tsnap_plus = @lift(data.xt[:, $tsnap] .+ sigma_x_filter)
+    #y_tsnap = @lift(data.yt[:, $tsnap])
+    #X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
+    #X_locenkf_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
 
     fig = Figure()
 
