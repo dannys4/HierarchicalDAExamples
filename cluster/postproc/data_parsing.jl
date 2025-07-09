@@ -14,7 +14,10 @@
 # ---
 
 # %%
-using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie, HierarchicalDA
+using Pkg; Pkg.activate(joinpath(@__DIR__, ".."))
+
+# %%
+using DataFrames, JLD2, Distributions, ProgressMeter, HierarchicalDA
 
 # %%
 if length(ARGS) < 2
@@ -27,11 +30,16 @@ if !ispath(data_path) || !isabspath(data_path)
     ArgumentError("Expected valid absolute path argument, got $data_path")
 end
 
-# %%
-function add_delta_y!(row::Vector{<:Pair{Symbol}}, file::JLD2.JLDFile)
-    data = file["data"]
-    push!(row, :delta_y => size(data["xt"], 1) ÷ size(data["yt"], 1))
+file_path = joinpath(@__DIR__, "data", filename)
+file_prepath = joinpath(split(file_path,"/")[1:end-1]...)
+if !ispath(file_prepath)
+    ArgumentError("Expected valid filename path, got $filename")
 end
+
+@info "Loading from $data_path, saving to $file_path"
+ff = jldopen(file_path, "w")
+ff["df"] = DataFrame()
+close(ff)
 
 # %%
 function flatten_properties(::Type{AcceptableType},
@@ -88,17 +96,14 @@ function create_rows(file::JLD2.JLDFile,
 end
 
 # %%
-rows = create_rows(ex_load; (preproc!)=add_delta_y!)
-
-# %%
 df = DataFrame()
 @showprogress "Collating files..." for filename in readdir(data_path)
     local rows
-    rows_curry = file -> create_rows(file; (preproc!)=add_delta_y!)
+    rows_curry = file -> create_rows(file)
     try
         rows = jldopen(rows_curry, joinpath(data_path, filename), "r")
     catch e
-        if e isa JLD2.InvalidDataException
+        if e isa JLD2.InvalidDataException || e isa EOFError
             @warn "Problematic file $filename, ignoring..."
         else
             rethrow(e)
@@ -108,4 +113,4 @@ df = DataFrame()
     end
 end
 
-@save joinpath(@__DIR__, "data", filename) df
+@save file_path df

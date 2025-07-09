@@ -15,30 +15,9 @@
 # ---
 
 # %%
-using Pkg
-proj_path = joinpath(@__DIR__, "..")
-Pkg.activate(proj_path)
-
-# %%
-using TransportBasedInference2
-using HierarchicalDA
-using LinearAlgebra
-using OrdinaryDiffEq
-using Trixi
-using Distributions
-using Statistics
-using SparseArrays
-using LinearMaps
-# using CairoMakie
-using JLD2
-using Dates
-using Random
-using JLD2
-using Trixi: entropy2cons
-
-# %%
 make_figs = false
 data_path = joinpath(@__DIR__, "data")
+proj_path = joinpath(@__DIR__, "..")
 #my_theme = Theme()
 
 # %%
@@ -101,6 +80,30 @@ isdefined(Main, :IJulia) || for arg in ARGS
     end
     @eval($sym_key = $val_T)
 end
+
+
+# %%
+using Pkg
+Pkg.activate(proj_path)
+@info "Activated project"
+
+# %%
+using TransportBasedInference2
+using HierarchicalDA
+using LinearAlgebra
+using OrdinaryDiffEq
+using Trixi
+using Distributions
+using Statistics
+using SparseArrays
+using LinearMaps
+# using CairoMakie
+using JLD2
+using Dates
+using Random
+using JLD2
+using Trixi: entropy2cons
+@info "Loaded packages"
 
 # %%
 Random.seed!(random_seed);

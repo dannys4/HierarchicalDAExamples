@@ -1,42 +1,20 @@
-#! /usr/bin/env python
+#! /usr/bin/env python3
 import argparse
 import shutil
 import os
 import subprocess
-import tqdm
 import copy
 
-parser = argparse.ArgumentParser(
-    prog='run_example',
-    usage='./run_example EXAMPLE [-n num_samples] -- [param1=val11,val12 param2=val21,val22,val23 ...]',
-    description='Run an example script for HierarchicalDA. Use "--" between number of trials and any parameters.',
-)
+script_dir = os.path.dirname(__file__)
 
 examples = [name[:-3] for name in os.listdir(
-    'examples') if name.endswith('.jl')]
-
-parser.add_argument('example',
-                    help='Which example to run. Choose `test` to check the parameter sweep.',
-                    choices=examples)
-
-parser.add_argument('-n', '--number',
-                    help='Number of trials',
-                    type=int,
-                    default=1)
-
-parser.add_argument('parameters',
-                    help="""
-                    parameters to pass onto the simulation (e.g., data_path, sigma_x_data, sigma_y, delta_t_obs, etc.).
-
-                    For making an matrix of different parameters, separate them by commas.
-                    """,
-                    nargs='*',
-                    default=[])
+    os.path.join(script_dir,'examples')) if name.endswith('.jl')]
 
 
-def run_example(example, args):
-    subprocess.run(["julia", os.path.join(
-        "examples", example+".jl"), *args])
+
+def run_example(jl_path, example, args):
+    subprocess.run([jl_path, os.path.join(
+        script_dir, "examples", example+".jl"), *args])
 
 
 def arg_matrix(args: list[str]):
@@ -58,19 +36,49 @@ def arg_matrix(args: list[str]):
                 matrix.append(trial)
     return matrix
 
-
+import sys
 if __name__ == '__main__':
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(
+        prog='run_example',
+        usage='./run_example EXAMPLE [-n num_samples] -- [param1=val11,val12 param2=val21,val22,val23 ...]',
+        description='Run an example script for HierarchicalDA. Use "--" between number of trials and any parameters.',
+        exit_on_error=False)
+
+    parser.add_argument('example',
+                    help='Which example to run. Choose `test` to check the parameter sweep.',
+                    choices=examples)
+
+    parser.add_argument('-n', '--number',
+                    help='Number of trials',
+                    type=int,
+                    default=1)
+
+    parser.add_argument('-j', '--julia',
+                    help='julia install path',
+                    type=str,
+                    default='julia')
+    """
+    parser.add_argument('parameters',
+                    help="
+                    parameters to pass onto the simulation (e.g., data_path, sigma_x_data, sigma_y, delta_t_obs, etc.).
+
+                    For making an matrix of different parameters, separate them by commas.
+                    ",
+                    nargs='*',
+                    default=[])
+    """
+    args, parameters = parser.parse_known_args()
+    print(parameters)
     # Repeat each trial N times
-    matrix = arg_matrix(args.parameters)
+    matrix = arg_matrix(parameters)
     trials = (matrix if len(matrix) > 0 else [[]])*args.number
     N = len(trials)
     if N < 1:
         raise ValueError(f"n must be >= 1, received {N}")
     elif N == 1:
-        run_example(args.example, trials[0])
+        run_example(args.julia, args.example, trials[0])
     else:
         print(f"Performing iterations 1,...,{N}!")
         for (j, trial) in enumerate(trials):
             print(f'Iteration {j+1}....')
-            run_example(args.example, trial)
+            run_example(args.julia, args.example, trial)
