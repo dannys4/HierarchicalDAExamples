@@ -2,9 +2,19 @@ FROM debian
 
 SHELL ["/bin/bash", "-c"]
 
+# Dockerfile for dannys4/hierarchical_data_assimilation
+
+ARG USERNAME=jovyan
+ARG USER_UID=1000
+ARG USER_GID=$USER_UID
+
+# Create the user
+RUN groupadd --gid $USER_GID $USERNAME \
+    && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME
+
 ENV JULIA_VERSION=1.11.5 \
     JULIA_INSTALLER=https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-1.11.5-linux-x86_64.tar.gz \
-    JULIA_BASE_DIR=/opt
+    JULIA_BASE_DIR=/home/${USERNAME}
 
 RUN apt-get update && apt-get install -y \
     wget \
@@ -13,6 +23,9 @@ RUN apt-get update && apt-get install -y \
     python3 \
     && apt-get clean
 
+# [Optional] Set the default user. Omit if you want to keep the default as root.
+USER $USERNAME
+
 RUN wget --quiet ${JULIA_INSTALLER} -O /tmp/julia.tar.gz && \
     tar -xf /tmp/julia.tar.gz -C ${JULIA_BASE_DIR} && \
     rm /tmp/julia.tar.gz && \
@@ -20,13 +33,13 @@ RUN wget --quiet ${JULIA_INSTALLER} -O /tmp/julia.tar.gz && \
 
 ENV PATH=${JULIA_BASE_DIR}/julia/bin:$PATH
 
-COPY ./Project.toml /root/.julia/environments/v1.11/
+COPY --chown=${USER_UID}:${USER_GID} --chmod=777 ./Project.toml /home/${USERNAME}/.julia/environments/v1.11/
 
-RUN apt-get install -y tmux && \
-    echo 'export PATH=/opt/julia/bin:$PATH' >> /root/.bashrc
+RUN echo 'export PATH=${JULIA_BASE_DIR}/julia/bin:$PATH' >> /home/${USERNAME}/.bashrc
 
-RUN julia -e "using Pkg; Pkg.instantiate();"
+RUN julia --compiled-modules=strict -e "using Pkg; Pkg.instantiate();"
+RUN julia --compiled-modules=strict -e "using Pkg; Pkg.precompile();"
 
-WORKDIR /root
+WORKDIR /home/${USERNAME}
 
 CMD ["/bin/bash"]
