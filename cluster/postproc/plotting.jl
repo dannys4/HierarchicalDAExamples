@@ -14,18 +14,35 @@
 # ---
 
 # %%
+using Pkg;
+Pkg.activate(joinpath(@__DIR__, "..", ".."))
+
+# %%
 using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie
 
 # %%
 data_path = joinpath(@__DIR__, "data")
-filename = "burgers_df.jld2"
+filename = "linear_advection_df.jld2"
 
 # %%
 @load joinpath(data_path, filename) df
 
 
 # %%
-df_cut = select(df, filter(j -> names(df)[j] != "random_seed" && length(unique(df[:, j])) > 1, axes(df, 2)))
+# Filter rows
+keep_rows = df[!, :tf] .== 10.
+df = df[keep_rows, :]
+
+# Filter cols
+rm_names = ["random_seed"]
+df_cols = names(df)
+one_unique = v -> (length(unique(v)) == 1)
+
+keep_cols = filter(axes(df, 2)) do j
+    !(df_cols[j] in rm_names || one_unique(df[!, j]))
+end
+
+df_cut = select(df, keep_cols)
 
 # %%
 function plot_convergence!(ax, df, fixed_key, fixed_val, x_axis, y_axis, marker_diffs, line_style, cols=Makie.wong_colors())
@@ -68,7 +85,7 @@ end
 # %%
 fixed_key = :Ne
 x_axis = :sigma_x_filter
-y_axis = :rmse2
+y_axis = :mass_err
 marker_diffs = :delta_y
 line_style = :algorithm
 
@@ -112,7 +129,8 @@ with_theme(theme_latexfonts(), Axis=(
         gl_legend[1, 1:2], plots_v, proc_label.(labels_v),
         patchsize=(50, 20), orientation=:horizontal)
     leg.nbanks = 2
-    save(joinpath(@__DIR__, "figs", "$(y_axis)_convergence.pdf"), fig)
+    fig_name = join(vcat(split(filename, "_")[1:end-1], string(y_axis), "convergence.pdf"), "_")
+    save(joinpath(@__DIR__, "figs", fig_name), fig)
     fig
 end
 
