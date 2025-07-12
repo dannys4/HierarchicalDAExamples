@@ -245,53 +245,55 @@ hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, del
 @info "Performing GSBL EnKF..."
 X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
-# %%
-mesh_weights = vec(sys_advection.mesh.md.wJq);
 
 # %%
-weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
-rel_norms = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
-
-errs_locenkf2 = map(j -> CRPS(X_locenkf[j+1], @view(data.xt[:, j]), :norm2, mesh_weights), axes(data.xt, 2))
-errs_hlocenkf2 = map(j -> CRPS(X_hlocenkf[j+1], @view(data.xt[:, j]), :norm2, mesh_weights), axes(data.xt, 2))
-
-rmse2_locenkf, rmse2_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
-crps2_locenkf, crps2_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf2, errs_hlocenkf2]]
-make_figs && @info "2-Norm results" rmse2_locenkf crps2_locenkf "======================" rmse2_hlocenkf crps2_hlocenkf;
-
-# %%
+mesh_weights = vec(sys_advection.mesh.md.wJq)
 weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
-rel_norms = map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
-
-errs_locenkf1 = map(j -> CRPS(X_locenkf[j+1], @view(data.xt[:, j]), :norm1, mesh_weights), axes(data.xt, 2))
-errs_hlocenkf1 = map(j -> CRPS(X_hlocenkf[j+1], @view(data.xt[:, j]), :norm1, mesh_weights), axes(data.xt, 2))
-
-rmse1_locenkf, rmse1_hlocenkf = [mean(i -> err[i].rmse / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
-crps1_locenkf, crps1_hlocenkf = [mean(i -> err[i].crps / rel_norms[i], eachindex(err, rel_norms)) for err in [errs_locenkf1, errs_hlocenkf1]]
-make_figs && @info "1-Norm results" rmse1_locenkf crps1_locenkf "======================" rmse1_hlocenkf crps1_hlocenkf;
-
-# %%
-mass_true, energy_true = [weight_sum_reduction.(eachcol(data.xt), fcn, (mesh_weights,)) for fcn in (abs, abs2)]
-mass_locenkf, energy_locenkf = [reduce(hcat, weight_sum_reduction.(eachcol(x), fcn, (mesh_weights,)) for x in X_locenkf) for fcn in (abs, abs2)]
-mass_hlocenkf, energy_hlocenkf = [reduce(hcat, weight_sum_reduction.(eachcol(x), fcn, (mesh_weights,)) for x in X_hlocenkf) for fcn in (abs, abs2)]
-mass_err_locenkf, energy_err_locenkf = [mean(t_idx -> abs(mean(enkf[:, t_idx+1]) - truth[t_idx]) / truth[t_idx], eachindex(truth)) for (truth, enkf) in [(mass_true, mass_locenkf), (energy_true, energy_locenkf)]]
-mass_err_hlocenkf, energy_err_hlocenkf = [mean(t_idx -> abs(mean(enkf[:, t_idx+1]) - truth[t_idx]) / truth[t_idx], eachindex(truth)) for (truth, enkf) in [(mass_true, mass_hlocenkf), (energy_true, energy_hlocenkf)]]
-make_figs && @info "Summary stat results" mass_err_locenkf energy_err_locenkf "======================" mass_err_hlocenkf energy_err_hlocenkf;
+weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
+rel_norms1 = map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
+rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
+get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
+get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> get_property(er[1], prop) / er[2], zip(err, rel_norms))
+metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
+calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
+advection_entropy = u -> entropy(u, sys_advection.equations)
+mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, advection_entropy])
 
 # %%
-jldopen(joinpath(data_path, "linear_advection_" * string(now()) * ".jld2"), "w") do file
+for alg in ["locenkf", "hlocenkf"]
+    # Error metrics
+    metric_dict = @eval($Symbol("metrics_$alg"))
+    X = @eval($Symbol("X_$alg"))
+    for which_norm in [1, 2]
+        norm = Symbol("norm$which_norm")
+        errs = get_errs(X, norm)
+        rel_norms = @eval($Symbol("rel_norms$which_norm"))
+        for metric in [:rmse, :crps]
+            metric_sym = Symbol("$metric$norm_$alg")
+            metric_dict[metric_sym] = get_Lp(errs, rel_norms, metric)
+        end
+    end
+
+    # Mass and Entropy
+    mass_alg, entropy_alg = [reduce(hcat, calc_moments(x, f) for x in X) for f in [abs, advection_entropy]]
+    metric_dict[:mass] = mass_alg
+    metric_dict[:entropy] = entropy_alg
+end
+
+# %%
+jldopen(joinpath(data_path, "advection_" * string(now()) * ".jld2"), "w") do file
     data_group = JLD2.Group(file, "data")
     for property in propertynames(data)
         data_group[string(property)] = getproperty(data, property)
     end
 
     data_param_group = JLD2.Group(file, "data_parameters")
-    for data_param in [:random_seed, :polydeg, :Ncells, :delta_t_dyn, :delta_t_obs, :sigma_x_data, :sigma_y, :t0, :tf, :delta_y]
+    for data_param in [:random_seed, :polydeg, :Ncells, :delta_t_dyn, :delta_t_obs, :sigma_x_data, :sigma_y, :t0, :tf]
         data_param_group[string(data_param)] = @eval($data_param)
     end
 
     filter_param_group = JLD2.Group(file, "filter_parameters")
-    for filter_param in [:Ne, :Lrad, :sigma_x_filter, :beta_infl, :alpha_k_f0]
+    for filter_param in [:Ne, :Lrad, :sigma_x_filter, :beta_infl, :alpha_k_f0, :L_f0]
         filter_param_group[string(filter_param)] = @eval($filter_param)
     end
 
@@ -300,20 +302,19 @@ jldopen(joinpath(data_path, "linear_advection_" * string(now()) * ".jld2"), "w")
         GSBL_param_group[string(GSBL_param)] = @eval($GSBL_param)
     end
 
+    filter_group = JLD2.Group(file, "filters")
     metric_group = JLD2.Group(file, "metrics")
-
+    metric_group[:true_mass] = mass_true
+    metric_group[:true_entropy] = entropy_true
     for alg in ["locenkf", "hlocenkf"]
         metric_subgroup = JLD2.Group(metric_group, alg)
-        for metric in ["rmse1", "crps1", "rmse2", "crps2", "mass_err", "energy_err"]
-            metric_symbol = Symbol(metric * "_" * alg)
-            metric_subgroup[metric] = @eval($metric_symbol)
+        metric_dict = @eval($Symbol("metrics_$alg"))
+        for key in keys(metric_dict)
+            metric_subgroup[string(key)] = metric_dict[key]
         end
+        X_alg = Symbol("X_" * alg)
+        filter_group[string(X_alg)] = @eval($X_alg)
     end
-
-
-    filter_group = JLD2.Group(file, "filters")
-    filter_group["X_locenkf"] = ("Localized EnKF", X_locenkf)
-    filter_group["X_hlocenkf"] = ("Hierarchical Localized EnKF", X_hlocenkf)
 end;
 
 # %%

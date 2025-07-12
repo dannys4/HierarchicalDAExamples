@@ -37,8 +37,8 @@ COPY --chown=${USER_UID}:${USER_GID} --chmod=777 ./Project.toml /home/${USERNAME
 
 RUN echo 'export PATH=${JULIA_BASE_DIR}/julia/bin:$PATH' >> /home/${USERNAME}/.bashrc
 
-RUN julia --compiled-modules=strict -e "using Pkg; Pkg.instantiate();"
-RUN julia --compiled-modules=strict -e "using Pkg; Pkg.precompile();"
+RUN julia --compiled-modules=strict -e "using Pkg; Pkg.instantiate()"
+RUN julia --compiled-modules=strict -e "using Pkg; Pkg.precompile()"
 
 WORKDIR /home/${USERNAME}
 

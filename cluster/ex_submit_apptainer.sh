@@ -8,7 +8,7 @@
 #SBATCH -a 1-32
 #SBATCH --mem=10G
 
-module load apptainer 
+module load apptainer
 export OUT_DATA_PATH=/pool001/$USER/HDA/linear_advection
 export IN_DATA_PATH=/mnt/data
 

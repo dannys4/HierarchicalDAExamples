@@ -340,76 +340,41 @@ catch e
 end
 
 # %%
-mesh_weights = repeat(vec(sys_euler.mesh.md.wJq), nvariables(sys_euler.equations))
-wt_state = @view(mesh_weights[idxρ]) # weights for a single state variable
-mass_true = data.xt[idxρ, :]' * wt_state
-
+mesh_weights = vec(sys_euler.mesh.md.wJq)
 weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
-rel_norms1 = map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
-
 weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
+rel_norms1 = map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
 rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
+get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
+get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> get_property(er[1], prop) / er[2], zip(err, rel_norms))
+metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
+calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
+euler_entropy = u -> entropy(u, sys_euler.equations)
+mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, euler_entropy])
 
-# Functor to calculate the energy over for one full state at one single time
-entropy_functor = u -> Trixi.entropy.(eachrow(reshape(u, :, 3)), sys_euler.equations)' * wt_state
-entropy_true = [entropy_functor(x) for x in eachcol(data.xt)];
-
-# %% [raw]
-# entropy_true
-
-# %%
-hlocenkf_metrics = Dict{Symbol,Any}()
-if @isdefined(X_hlocenkf)
-    errs_hlocenkf1, errs_hlocenkf2 = [
-        map(j -> CRPS(X_hlocenkf[j+1], @view(data.xt[:, j]), which_norm, mesh_weights), axes(data.xt, 2))
-        for which_norm in [:norm1, :norm2]
-    ]
-
-    rmse1_hlocenkf, crps1_hlocenkf = [
-        mean(i -> getproperty(errs_hlocenkf1[i], prop) / rel_norms1[i], eachindex(errs_hlocenkf1, rel_norms1))
-        for prop in [:rmse, :crps]
-    ]
-
-    rmse2_hlocenkf, crps2_hlocenkf = [
-        mean(i -> getproperty(errs_hlocenkf2[i], prop) / rel_norms2[i], eachindex(errs_hlocenkf2, rel_norms2))
-        for prop in [:rmse, :crps]
-    ]
-
-    mass_hlocenkf = reduce(hcat, @view(x[idxρ, :])' * wt_state for x in X_hlocenkf)
-    entropy_hlocenkf = reduce(hcat, entropy_functor.(eachcol(x)) for x in X_hlocenkf)
-
-    for res in [:rmse1_hlocenkf, :rmse2_hlocenkf, :crps1_hlocenkf, :crps2_hlocenkf, :mass_hlocenkf, :entropy_hlocenkf]
-        hlocenkf_metrics[res] = @eval($res)
-    end
-    @info "GSBL results" hlocenkf_metrics
-end
 
 # %%
-locenkf_metrics = Dict{Symbol,Float64}()
-if @isdefined(X_locenkf)
-    errs_locenkf1, errs_locenkf2 = [
-        map(j -> CRPS(X_locenkf[j+1], @view(data.xt[:, j]), which_norm, mesh_weights), axes(data.xt, 2))
-        for which_norm in [:norm1, :norm2]
-    ]
-
-    rmse1_locenkf, crps1_locenkf = [
-        mean(i -> getproperty(errs_locenkf1[i], prop) / rel_norms2[i], eachindex(errs_locenkf1, rel_norms1))
-        for prop in [:rmse, :crps]
-    ]
-
-    rmse2_locenkf, crps2_locenkf = [
-        mean(i -> getproperty(errs_locenkf2[i], prop) / rel_norms2[i], eachindex(errs_locenkf2, rel_norms2))
-        for prop in [:rmse, :crps]
-    ]
-
-    mass_locenkf = reduce(hcat, @view(x[idxρ, :])' * wt_state for x in X_locenkf)
-    entropy_locenkf = reduce(hcat, entropy_functor.(eachcol(x)) for x in X_locenkf)
-
-    for res in [:rmse1_locenkf, :rmse2_locenkf, :crps1_locenkf, :crps2_locenkf, :mass_locenkf, :entropy_locenkf]
-        locenkf_metrics[res] = @eval($res)
+for alg in ["locenkf", "hlocenkf"]
+    # Error metrics
+    metric_dict = @eval($Symbol("metrics_$alg"))
+    eval(Expr(:isdefined, Symbol("X_" * alg))) || continue
+    X = @eval($Symbol("X_$alg"))
+    for which_norm in [1, 2]
+        norm = Symbol("norm$which_norm")
+        errs = get_errs(X, norm)
+        rel_norms = @eval($Symbol("rel_norms$which_norm"))
+        for metric in [:rmse, :crps]
+            metric_sym = Symbol("$metric$norm_$alg")
+            metric_dict[metric_sym] = get_Lp(errs, rel_norms, metric)
+        end
     end
-    @info "EnKF results" locenkf_metrics
+
+    # Mass and Entropy
+    mass_alg, entropy_alg = [reduce(hcat, calc_moments(x, f) for x in X) for f in [abs, euler_entropy]]
+    metric_dict[:mass] = mass_alg
+    metric_dict[:entropy] = entropy_alg
 end
+
 
 # %%
 jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do file
@@ -433,20 +398,22 @@ jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do fil
         GSBL_param_group[string(GSBL_param)] = @eval($GSBL_param)
     end
 
+    filter_group = JLD2.Group(file, "filters")
     metric_group = JLD2.Group(file, "metrics")
+    metric_group[:true_mass] = mass_true
+    metric_group[:true_entropy] = entropy_true
 
     for alg in ["locenkf", "hlocenkf"]
-        eval(Expr(:isdefined, Symbol("X_" * alg))) || continue
-        metric_dict = @eval($Symbol(alg * "_metrics"))
+        X_alg = Symbol("X_$alg")
+        eval(Expr(:isdefined, X_alg)) || continue
+        filter_group[string(X_alg)] = @eval($X_alg)
+
+        metric_dict = @eval($Symbol("metrics_$alg"))
         metric_subgroup = JLD2.Group(metric_group, alg)
         for metric in keys(metric_dict)
             metric_subgroup[metric] = metric_dict[metric]
         end
     end
-
-    filter_group = JLD2.Group(file, "filters")
-    @isdefined(X_locenkf) && (filter_group["X_locenkf"] = ("Localized EnKF", @eval($(:X_locenkf))))
-    @isdefined(X_hlocenkf) && (filter_group["X_hlocenkf"] = ("Hierarchical Localized EnKF", X_hlocenkf))
 end;
 
 # %%
