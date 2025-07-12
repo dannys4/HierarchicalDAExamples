@@ -318,9 +318,8 @@ try
     X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
     global X_locenkf
-    @warn "Localized EnKF failed for Shu-Osher"
+    @warn "Localized EnKF failed for Shu-Osher, $(typeof(e))"
     success_locenkf = false
-    X_locenkf = nothing
 end
 
 # %%
@@ -334,43 +333,49 @@ try
 catch e
     rethrow(e)
     global X_hlocenkf, θ_hlocenkf
-    @warn "GSBL localized EnKF failed for Shu-Osher"
+    @warn "GSBL localized EnKF failed for Shu-Osher, $(typeof(e))"
     success_hlocenkf = false
-    X_hlocenkf = θ_hlocenkf = nothing
 end
 
 # %%
-mesh_weights = vec(sys_euler.mesh.md.wJq)
+mesh_weights_state = vec(sys_euler.mesh.md.wJq)
+mesh_weights = repeat(mesh_weights_state, nvariables(equations))
+calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
 weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
 weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
-rel_norms1 = map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
+rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
 rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
 get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
-get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> get_property(er[1], prop) / er[2], zip(err, rel_norms))
+get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
 metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
-calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
-euler_entropy = u -> entropy(u, sys_euler.equations)
-mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, euler_entropy])
+euler_entropy = u -> Trixi.entropy(u, equations)
+euler_qoi_member = (u, fcn) -> mesh_weights_state' * fcn.(eachrow(reshape(u, :, nvariables(equations))), (equations,))
+euler_qoi_ens = (u_ens, fcn) -> euler_qoi_member.(eachcol(u_ens), fcn)
+mass_true, entropy_true = euler_qoi_ens(data.xt, Trixi.density), euler_qoi_ens(data.xt, Trixi.entropy)
 
 
 # %%
-for alg in ["locenkf", "hlocenkf"]
+for alg_name in ["locenkf", "hlocenkf"]
     # Error metrics
-    metric_dict = @eval($Symbol("metrics_$alg"))
-    eval(Expr(:isdefined, Symbol("X_" * alg))) || continue
-    X = @eval($Symbol("X_$alg"))
+    metric_sym = Symbol("metrics_$alg_name")
+    metric_dict = @eval($metric_sym)
+    X_sym = Symbol("X_$alg_name")
+    eval(Expr(:isdefined, X_sym)) || continue
+    X = @eval($X_sym)
+    isnothing(X) && continue
     for which_norm in [1, 2]
         norm = Symbol("norm$which_norm")
         errs = get_errs(X, norm)
-        rel_norms = @eval($Symbol("rel_norms$which_norm"))
+        rel_norms_sym = Symbol("rel_norms$which_norm")
+        rel_norms = @eval($rel_norms_sym)
         for metric in [:rmse, :crps]
-            metric_sym = Symbol("$metric$norm_$alg")
+            metric_sym = Symbol(string(metric) * string(which_norm) * "_" * alg_name)
             metric_dict[metric_sym] = get_Lp(errs, rel_norms, metric)
         end
     end
 
     # Mass and Entropy
-    mass_alg, entropy_alg = [reduce(hcat, calc_moments(x, f) for x in X) for f in [abs, euler_entropy]]
+    mass_alg, entropy_alg = map(f -> reduce(hcat, euler_qoi_ens(x, f) for x in X), [Trixi.density, Trixi.entropy])
     metric_dict[:mass] = mass_alg
     metric_dict[:entropy] = entropy_alg
 end
@@ -400,18 +405,19 @@ jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do fil
 
     filter_group = JLD2.Group(file, "filters")
     metric_group = JLD2.Group(file, "metrics")
-    metric_group[:true_mass] = mass_true
-    metric_group[:true_entropy] = entropy_true
+    metric_group["true_mass"] = mass_true
+    metric_group["true_entropy"] = entropy_true
 
     for alg in ["locenkf", "hlocenkf"]
         X_alg = Symbol("X_$alg")
         eval(Expr(:isdefined, X_alg)) || continue
         filter_group[string(X_alg)] = @eval($X_alg)
 
-        metric_dict = @eval($Symbol("metrics_$alg"))
+        metric_sym = Symbol("metrics_$alg")
+        metric_dict = @eval($metric_sym)
         metric_subgroup = JLD2.Group(metric_group, alg)
         for metric in keys(metric_dict)
-            metric_subgroup[metric] = metric_dict[metric]
+            metric_subgroup[string(metric)] = metric_dict[metric]
         end
     end
 end;

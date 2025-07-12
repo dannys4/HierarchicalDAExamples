@@ -17,15 +17,14 @@
 # %%
 make_figs = false
 data_path = joinpath(@__DIR__, "data")
-proj_path = joinpath(@__DIR__, "..")
-#my_theme = Theme()
+proj_path = joinpath(@__DIR__, "../..")
 
 # %%
 random_seed = rand(UInt)
 
 # %%
 # PDE solution parameters
-polydeg = 6
+polydeg = 3
 advection_velocity = 0.1
 
 Ncells = 100
@@ -36,7 +35,7 @@ coordinates_min, coordinates_max = -1., 1.
 delta_y = 50
 delta_t_dyn = 0.05
 delta_t_obs = 0.25
-t0, tf = 0.0, 1.0
+t0, tf = 0.0, 25.0
 sigma_x_data = 1e-5
 sigma_y = 0.2
 
@@ -103,9 +102,11 @@ using Dates
 using Random
 using JLD2
 using Trixi: entropy2cons
+make_figs && using CairoMakie
 @info "Loaded packages"
 
 # %%
+make_figs && (my_theme = theme_minimal())
 Random.seed!(random_seed);
 
 # %%
@@ -194,26 +195,29 @@ end
 Nx = length(xgrid)
 yidx = 1:delta_y:Nx
 
-# # Create Localization structure
+# Create Localization structure
 Gxx(i, j) = periodicmetric!(i, j, Nx)
 Gxy(i, j) = periodicmetric!(i, yidx[j], Nx)
 Gyy(i, j) = periodicmetric!(yidx[i], yidx[j], Nx)
 
-Loc = Localization(Lrad, Gxx, Gxy, Gxx)
+Loc = Localization(Nx, Lrad, Gxx, is_sparse=true)
 ϵxβ_enkf = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
 Cϵ = LinearMap(ϵy.Σ)
 # This CX is replaced with the estimated state cov at each step
-CX = LinearMap(I(Nx))
-sys_y = ObsSystem(H, Cϵ, CX)
+sys_y = ObsSystem(H, Cϵ)
 locenkf = LocEnKF(Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 
 # %%
 @info "Performing EnKF..."
 X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
-## Selecion of hyper-prior parameters
+# %%
+@profview seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+
+# %%
+# Selecion of hyper-prior parameters
 # power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter 
@@ -230,13 +234,13 @@ dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 PA_offset = ceil(Int, order_PA / 2)
 Ns = Nx - 2PA_offset
 PA = PolyAnnil(xgrid, order_PA; istruncated=true)
-S = LinearMaps.FunctionMap{Float64,true}((s, x) -> mul!(s, PA.P, x), (x, s) -> mul!(x, PA.P', s), Ns, Nx; issymmetric=false, isposdef=false)
+S = LinearMaps.LinearMap(PA.P)
 xgrid_S = xgrid[PA_offset+1:end-PA_offset];
 
 # %%
 theta_init_vec = fill(theta_init, Ns)
 Cθ = LinearMap(Diagonal(theta_init_vec))
-sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX)
+sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
 hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
@@ -247,37 +251,48 @@ X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0)
 
 
 # %%
-mesh_weights = vec(sys_advection.mesh.md.wJq)
+mesh_weights_state = vec(sys_advection.mesh.md.wJq)
+mesh_weights = repeat(mesh_weights_state, nvariables(equations))
+calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
 weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
 weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
-rel_norms1 = map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
+rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
 rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
 get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
-get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> get_property(er[1], prop) / er[2], zip(err, rel_norms))
-metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
-calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
-advection_entropy = u -> entropy(u, sys_advection.equations)
+get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
+advection_entropy = u -> Trixi.entropy(u, sys_advection.equations)
+TV_norm_state = u -> sum(abs, diff(u))
+TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
+TVN_true = TV_norm_ensemble(data.xt)
 mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, advection_entropy])
 
+metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
+
 # %%
-for alg in ["locenkf", "hlocenkf"]
+for alg_name in ["locenkf", "hlocenkf"]
     # Error metrics
-    metric_dict = @eval($Symbol("metrics_$alg"))
-    X = @eval($Symbol("X_$alg"))
+    metric_sym = Symbol("metrics_$alg_name")
+    metric_dict = @eval($metric_sym)
+    X_sym = Symbol("X_$alg_name")
+    X = @eval($X_sym)
+    @info alg_name
     for which_norm in [1, 2]
         norm = Symbol("norm$which_norm")
         errs = get_errs(X, norm)
-        rel_norms = @eval($Symbol("rel_norms$which_norm"))
+        rel_norms_sym = Symbol("rel_norms$which_norm")
+        rel_norms = @eval($rel_norms_sym)
         for metric in [:rmse, :crps]
-            metric_sym = Symbol("$metric$norm_$alg")
+            metric_sym = Symbol(string(metric) * string(which_norm) * "_" * alg_name)
             metric_dict[metric_sym] = get_Lp(errs, rel_norms, metric)
         end
     end
 
-    # Mass and Entropy
-    mass_alg, entropy_alg = [reduce(hcat, calc_moments(x, f) for x in X) for f in [abs, advection_entropy]]
+    # Mass, Entropy, and TV
+    tv_alg = reduce(hcat, TV_norm_ensemble(x) for x in X)
+    mass_alg, entropy_alg = map(f -> reduce(hcat, calc_moments(x, f) for x in X), [abs, advection_entropy])
     metric_dict[:mass] = mass_alg
     metric_dict[:entropy] = entropy_alg
+    metric_dict[:tv_norm] = tv_alg
 end
 
 # %%
