@@ -88,7 +88,6 @@ using Pkg
 Pkg.activate(proj_path)
 
 # %%
-using Revise
 using Trixi
 using LinearAlgebra
 using OrdinaryDiffEq
@@ -190,6 +189,7 @@ stage_limiter! = PositivityPreservingLimiterZhangShu(thresholds=thresholds,
 ode_solver = SSPRK43(stage_limiter!)
 
 # %%
+@info "Generating data..."
 data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, cfl=0.9)
 
 # %%
@@ -308,6 +308,7 @@ locenkf = LocEnKF(x -> max.(x, 1e-6), Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_
 
 # %%
 local X_locenkf
+@info "Performing EnKF..."
 try
     global X_locenkf
     X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
@@ -317,6 +318,7 @@ catch e
 end
 
 # %%
+@info "Performing GSBL EnKF..."
 hlocenkf = HLocEnKF(x -> max.(x, 1e-6), Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isfiltered=true)
 
 # %%
@@ -356,11 +358,11 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict = @eval($metric_sym)
     X_sym = Symbol("X_$alg_name")
     eval(Expr(:isdefined, X_sym)) || continue
-    X = @eval($X_sym)
-    isnothing(X) && continue
+    X_traj = @eval($X_sym)
+    isnothing(X_traj) && continue
     for which_norm in [1, 2]
         norm = Symbol("norm$which_norm")
-        errs = get_errs(X, norm)
+        errs = get_errs(X_traj, norm)
         rel_norms_sym = Symbol("rel_norms$which_norm")
         rel_norms = @eval($rel_norms_sym)
         for metric in [:rmse, :crps]
@@ -370,8 +372,8 @@ for alg_name in ["locenkf", "hlocenkf"]
     end
 
     # TV, Mass, Entropy
-    tv_alg = reduce(hcat, TV_norm_ensemble(x) for x in X)
-    mass_alg, entropy_alg = map(f -> reduce(hcat, euler_qoi_ens(x, f) for x in X), [Trixi.density, Trixi.entropy])
+    tv_alg = reduce(hcat, TV_norm_ensemble(x) for x in X_traj)
+    mass_alg, entropy_alg = map(f -> reduce(hcat, euler_qoi_ens(x, f) for x in X_traj), [Trixi.density, Trixi.entropy])
     metric_dict[:mass] = mass_alg
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
@@ -510,7 +512,7 @@ make_figs && with_theme(my_theme) do
 end
 
 # %%
-with_theme(my_theme) do
+make_figs && with_theme(my_theme) do
     cols = Makie.wong_colors()
     N_T = length(data.tt)
     p_t = t -> data.xt[idxps, t]

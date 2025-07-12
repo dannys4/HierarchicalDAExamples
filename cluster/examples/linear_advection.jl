@@ -299,7 +299,7 @@ jldopen(joinpath(data_path, "advection_" * string(now()) * ".jld2"), "w") do fil
     end
 
     filter_param_group = JLD2.Group(file, "filter_parameters")
-    for filter_param in [:Ne, :Lrad, :sigma_x_filter, :beta_infl, :alpha_k_f0, :L_f0]
+    for filter_param in [:Ne, :Lrad, :sigma_x_filter, :beta_infl, :alpha_k_f0]
         filter_param_group[string(filter_param)] = @eval($filter_param)
     end
 
