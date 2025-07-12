@@ -17,7 +17,7 @@
 # %%
 make_figs = false
 data_path = joinpath(@__DIR__, "data")
-proj_path = joinpath(@__DIR__, "../..")
+proj_path = joinpath(@__DIR__, "..")
 
 # %%
 random_seed = rand(UInt)
@@ -197,9 +197,6 @@ yidx = 1:delta_y:Nx
 
 # Create Localization structure
 Gxx(i, j) = periodicmetric!(i, j, Nx)
-Gxy(i, j) = periodicmetric!(i, yidx[j], Nx)
-Gyy(i, j) = periodicmetric!(yidx[i], yidx[j], Nx)
-
 Loc = Localization(Nx, Lrad, Gxx, is_sparse=true)
 ϵxβ_enkf = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
@@ -214,10 +211,7 @@ locenkf = LocEnKF(Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
 # %%
-@profview seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
-
-# %%
-# Selecion of hyper-prior parameters
+# Selection of hyper-prior parameters
 # power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter 
@@ -249,6 +243,8 @@ hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, del
 @info "Performing GSBL EnKF..."
 X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
+# %%
+@profview seqassim_trixi(data, 20, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
 # %%
 mesh_weights_state = vec(sys_advection.mesh.md.wJq)
@@ -261,7 +257,7 @@ rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
 get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
 get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
 advection_entropy = u -> Trixi.entropy(u, sys_advection.equations)
-TV_norm_state = u -> sum(abs, diff(u))
+TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
 TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
 TVN_true = TV_norm_ensemble(data.xt)
 mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, advection_entropy])

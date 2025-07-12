@@ -100,8 +100,10 @@ using SparseArrays
 using JLD2
 using Dates
 using Random
+make_figs && using CairoMakie
 
 # %%
+make_figs && (my_theme = theme_minimal())
 Random.seed!(random_seed);
 
 # %%
@@ -287,7 +289,7 @@ end
 # %%
 CX = LinearMap(collect(1. * I(Nx)))
 Cϵ = LinearMap(ϵy.Σ)
-sys_y = ObsSystem(H, Cϵ, CX)
+sys_y = ObsSystem(H, Cϵ)
 
 theta_init_vec = fill(theta_init, Ns)
 Cθ = LinearMap(Diagonal(theta_init_vec))
@@ -299,17 +301,12 @@ idx = vcat(collect(1:length(yidx))', collect(yidx)')
 
 # # Create Localization structure
 @inline Gxx(i, j) = cartesianmetric(mod(i, Nxvar), mod(j, Nxvar))
-# @inline Gxy(i, j) = cartesianmetric(mod(i, Nxvar), mod(yidx[j], Nxvar))
-# @inline Gyy(i, j) = cartesianmetric(mod(yidx[i], Nxvar), mod(yidx[j], Nxvar))
 Loc = Localization(Nx, Lrad, Gxx, is_sparse=true)
 
 filter_inflation = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
-success_locenkf = success_hlocenkf = true;
-
-# %%
-# locenkf = LocEnKF(x -> max.(x, 1e-6), Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=true)
+locenkf = LocEnKF(x -> max.(x, 1e-6), Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=true)
 
 # %%
 local X_locenkf
@@ -319,7 +316,6 @@ try
 catch e
     global X_locenkf
     @warn "Localized EnKF failed for Shu-Osher, $(typeof(e))"
-    success_locenkf = false
 end
 
 # %%
@@ -331,10 +327,8 @@ try
     global X_hlocenkf, θ_hlocenkf
     X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
-    rethrow(e)
     global X_hlocenkf, θ_hlocenkf
     @warn "GSBL localized EnKF failed for Shu-Osher, $(typeof(e))"
-    success_hlocenkf = false
 end
 
 # %%
@@ -347,11 +341,13 @@ rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weig
 rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
 get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
 get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
-metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
 euler_entropy = u -> Trixi.entropy(u, equations)
 euler_qoi_member = (u, fcn) -> mesh_weights_state' * fcn.(eachrow(reshape(u, :, nvariables(equations))), (equations,))
 euler_qoi_ens = (u_ens, fcn) -> euler_qoi_member.(eachcol(u_ens), fcn)
 mass_true, entropy_true = euler_qoi_ens(data.xt, Trixi.density), euler_qoi_ens(data.xt, Trixi.entropy)
+TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
+TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
+metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
 
 
 # %%
@@ -374,12 +370,13 @@ for alg_name in ["locenkf", "hlocenkf"]
         end
     end
 
-    # Mass and Entropy
+    # TV, Mass, Entropy
+    tv_alg = reduce(hcat, TV_norm_ensemble(x) for x in X)
     mass_alg, entropy_alg = map(f -> reduce(hcat, euler_qoi_ens(x, f) for x in X), [Trixi.density, Trixi.entropy])
     metric_dict[:mass] = mass_alg
     metric_dict[:entropy] = entropy_alg
+    metric_dict[:tv_norm] = tv_alg
 end
-
 
 # %%
 jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do file
@@ -411,7 +408,9 @@ jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do fil
     for alg in ["locenkf", "hlocenkf"]
         X_alg = Symbol("X_$alg")
         eval(Expr(:isdefined, X_alg)) || continue
-        filter_group[string(X_alg)] = @eval($X_alg)
+        X_traj = @eval($X_alg)
+        isnothing(X_traj) && continue
+        filter_group[string(X_alg)] = X_traj
 
         metric_sym = Symbol("metrics_$alg")
         metric_dict = @eval($metric_sym)
@@ -423,7 +422,7 @@ jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do fil
 end;
 
 # %%
-make_figs && with_theme(my_theme()) do
+make_figs && with_theme(my_theme) do
     fig = Figure(size=(1010, 500))
     tsnap = 50
     idx = 10
@@ -447,7 +446,7 @@ make_figs && with_theme(my_theme()) do
     cols = Makie.wong_colors()
     for j in 1:Ne
         col = cols[mod1(j, length(cols))]
-        lines!(ax1, xgrid, X_locenkf[tsnap+1][:, j][idxρ, 1], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=(col, 0.2))
+        # lines!(ax1, xgrid, X_locenkf[tsnap+1][:, j][idxρ, 1], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=(col, 0.2))
         lines!(ax2, xgrid, X_hlocenkf[tsnap+1][:, j][idxρ, 1], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=(col, 0.2))
     end
     # lines!(ax, xgrid, mean(X_hlocenkf[tsnap+1]; dims = 2)[idxρ,1], linewidth = 3, label = "HLocEnKF")
