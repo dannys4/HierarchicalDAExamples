@@ -18,8 +18,6 @@
 make_figs = false
 data_path = joinpath(@__DIR__, "data")
 proj_path = joinpath(@__DIR__, "..")
-
-# %%
 random_seed = rand(UInt)
 
 # %%
@@ -96,7 +94,6 @@ using Distributions
 using Statistics
 using SparseArrays
 using LinearMaps
-# using CairoMakie
 using JLD2
 using Dates
 using Random
@@ -107,6 +104,8 @@ make_figs && using CairoMakie
 
 # %%
 make_figs && (my_theme = theme_minimal())
+make_figs || macro L_str(args...) end; # Define L_str in case we aren't loading CairoMakie
+make_figs || macro lift(args...) end; # Define L_str in case we aren't loading CairoMakie
 Random.seed!(random_seed);
 
 # %%
@@ -244,9 +243,6 @@ hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, del
 X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
 # %%
-@profview seqassim_trixi(data, 20, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
-
-# %%
 mesh_weights_state = vec(sys_advection.mesh.md.wJq)
 mesh_weights = repeat(mesh_weights_state, nvariables(equations))
 calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
@@ -271,7 +267,6 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict = @eval($metric_sym)
     X_sym = Symbol("X_$alg_name")
     X = @eval($X_sym)
-    @info alg_name
     for which_norm in [1, 2]
         norm = Symbol("norm$which_norm")
         errs = get_errs(X, norm)
@@ -315,15 +310,17 @@ jldopen(joinpath(data_path, "advection_" * string(now()) * ".jld2"), "w") do fil
 
     filter_group = JLD2.Group(file, "filters")
     metric_group = JLD2.Group(file, "metrics")
-    metric_group[:true_mass] = mass_true
-    metric_group[:true_entropy] = entropy_true
+    metric_group["true_mass"] = mass_true
+    metric_group["true_entropy"] = entropy_true
+    metric_group["true_tv_norm"] = TVN_true
     for alg in ["locenkf", "hlocenkf"]
         metric_subgroup = JLD2.Group(metric_group, alg)
-        metric_dict = @eval($Symbol("metrics_$alg"))
+        metric_alg = Symbol("metrics_$alg")
+        metric_dict = @eval($metric_alg)
         for key in keys(metric_dict)
             metric_subgroup[string(key)] = metric_dict[key]
         end
-        X_alg = Symbol("X_" * alg)
+        X_alg = Symbol("X_$alg")
         filter_group[string(X_alg)] = @eval($X_alg)
     end
 end;

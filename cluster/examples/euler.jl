@@ -104,6 +104,8 @@ make_figs && using CairoMakie
 
 # %%
 make_figs && (my_theme = theme_minimal())
+make_figs || macro L_str(args...) end; # Define L_str in case we aren't loading CairoMakie
+make_figs || macro lift(args...) end; # Define L_str in case we aren't loading CairoMakie
 Random.seed!(random_seed);
 
 # %%
@@ -197,10 +199,6 @@ for (t, x) in enumerate(eachcol(data.xt))
     u_state = reshape(x, :, 3)
     ents[t] = quad_wts'map(u -> Trixi.entropy(vec(u), sys_euler.equations), eachrow(u_state))
 end
-
-# %%
-eval(Expr(:isdefined, :Makie)) || macro L_str(args...) end; # Define L_str in case we aren't loading CairoMakie
-eval(Expr(:isdefined, :Makie)) || macro lift(args...) end; # Define L_str in case we aren't loading CairoMakie
 
 # %%
 make_figs && display(lines(data.tt, ents, axis=(; title="Entropy of Shu-Osher shock", xlabel=L"t", ylabel=L"e")));
@@ -347,6 +345,7 @@ euler_qoi_ens = (u_ens, fcn) -> euler_qoi_member.(eachcol(u_ens), fcn)
 mass_true, entropy_true = euler_qoi_ens(data.xt, Trixi.density), euler_qoi_ens(data.xt, Trixi.entropy)
 TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
 TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
+TVN_true = TV_norm_ensemble(data.xt)
 metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
 
 
@@ -404,7 +403,7 @@ jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do fil
     metric_group = JLD2.Group(file, "metrics")
     metric_group["true_mass"] = mass_true
     metric_group["true_entropy"] = entropy_true
-
+    metric_group["true_tv_norm"] = TVN_true
     for alg in ["locenkf", "hlocenkf"]
         X_alg = Symbol("X_$alg")
         eval(Expr(:isdefined, X_alg)) || continue

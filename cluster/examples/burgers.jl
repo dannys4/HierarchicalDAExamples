@@ -15,33 +15,10 @@
 # ---
 
 # %%
-using Pkg
-proj_path = joinpath(@__DIR__, "..", "..")
-Pkg.activate(proj_path)
-
-# %%
-using TransportBasedInference2
-using HierarchicalDA
-using LinearAlgebra
-using OrdinaryDiffEq
-using Trixi
-using FFTW
-using Distributions
-using Statistics
-using SparseArrays
-using LinearMaps
-using CairoMakie
-using JLD2
-using Dates
-using Random
-
-# %%
-# Logistics
 make_figs = false
-my_theme = theme_latexfonts()
-update_theme!(my_theme, linewidth=3.)
-random_seed = rand(UInt)
 data_path = joinpath(@__DIR__, "data")
+proj_path = joinpath(@__DIR__, "..")
+random_seed = rand(UInt)
 
 # %%
 # Problem setup params
@@ -69,8 +46,7 @@ alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 order_PA = 3 # Poly annihilator order
 Niter = 5
 theta_init = 1.
-
-hyperprior_idx = 3
+hyperprior_idx = 4
 
 # %%
 # Assign any given arguments
@@ -94,6 +70,28 @@ isdefined(Main, :IJulia) || for arg in ARGS
 end
 
 # %%
+using Pkg
+Pkg.activate(proj_path)
+
+# %%
+using TransportBasedInference2
+using HierarchicalDA
+using LinearAlgebra
+using OrdinaryDiffEq
+using Trixi
+using Distributions
+using Statistics
+using SparseArrays
+using LinearMaps
+using JLD2
+using Dates
+using Random
+make_figs && using CairoMakie
+
+# %%
+make_figs && (my_theme = theme_minimal())
+make_figs || macro L_str(args...) end; # Define L_str in case we aren't loading CairoMakie
+make_figs || macro lift(args...) end; # Define L_str in case we aren't loading CairoMakie
 Random.seed!(random_seed);
 
 # %%
@@ -134,10 +132,10 @@ mesh_wts = vec(sys_burgers.mesh.md.wJq)
 ents = [mesh_wts'Trixi.entropy.(x, (sys_burgers.equations,)) for x in eachcol(data.xt)]
 
 # %%
-lines(ents)
+make_figs && display(lines(ents));
 
 # %%
-make_figs && heatmap(delta_t_obs * (1:Tf), xgrid, data.xt', axis=(; xlabel=L"t", ylabel=L"x", title=L"Solution of inviscid burgers, $u(x,t)$"))
+make_figs && display(heatmap(delta_t_obs * (1:Tf), xgrid, data.xt', axis=(; xlabel=L"t", ylabel=L"x", title=L"Solution of inviscid burgers, $u(x,t)$")));
 
 # %%
 make_figs && with_theme(my_theme) do
@@ -176,8 +174,7 @@ end
 
 # %%
 Cϵ = LinearMap(ϵy.σ)
-CX = LinearMap(Diagonal(1.0 .+ rand(Nx)))
-sys_y = ObsSystem(H, Cϵ, CX);
+sys_y = ObsSystem(H, Cϵ);
 
 # %%
 yidx = 1:delta_y:Nx
@@ -185,9 +182,6 @@ idx = vcat(collect(1:length(yidx))', collect(yidx)')
 
 # Create Localization structure
 Gxx(i, j) = periodicmetric!(i, j, Nx)
-Gxy(i, j) = periodicmetric!(i, yidx[j], Nx)
-Gyy(i, j) = periodicmetric!(yidx[i], yidx[j], Nx)
-
 Loc = Localization(Nx, Lrad, Gxx, is_sparse=true)
 ϵxbeta_filter = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
@@ -221,12 +215,11 @@ Ns = Nx - 2 * PA_offset
 PA = PolyAnnil(xgrid, order_PA; istruncated=true)
 @assert size(PA.P) == (Ns, Nx)
 
-S = LinearMaps.FunctionMap{Float64,true}((s, x) -> mul!(s, PA.P, x), (x, s) -> mul!(x, PA.P', s),
-    Ns, Nx; issymmetric=false, isposdef=false)
+S = LinearMaps.WrappedMap(PA.P)
 
 theta_init_vec = fill(theta_init, Ns)
 Cθ = LinearMap(Diagonal(theta_init_vec))
-sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX);
+sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ);
 
 # %%
 hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
@@ -236,37 +229,48 @@ hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, del
 X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
-mesh_weights = vec(sys_burgers.mesh.md.wJq)
+equations = sys_burgers.equations
+mesh_weights_state = vec(sys_burgers.mesh.md.wJq)
+mesh_weights = repeat(mesh_weights_state, nvariables(equations))
+calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
 weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
 weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
-rel_norms1 = map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
+rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
 rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
 get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
-get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> get_property(er[1], prop) / er[2], zip(err, rel_norms))
+get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
+advection_entropy = u -> Trixi.entropy(u, equations)
+TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
+TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
+TVN_true = TV_norm_ensemble(data.xt)
+mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, advection_entropy])
+
 metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
-calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
-burgers_entropy = u -> entropy(u, sys_burgers.equations)
-mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, burgers_entropy])
 
 # %%
-for alg in ["locenkf", "hlocenkf"]
+for alg_name in ["locenkf", "hlocenkf"]
     # Error metrics
-    metric_dict = @eval($Symbol("metrics_$alg"))
-    X = @eval($Symbol("X_$alg"))
+    metric_sym = Symbol("metrics_$alg_name")
+    metric_dict = @eval($metric_sym)
+    X_sym = Symbol("X_$alg_name")
+    X = @eval($X_sym)
     for which_norm in [1, 2]
         norm = Symbol("norm$which_norm")
         errs = get_errs(X, norm)
-        rel_norms = @eval($Symbol("rel_norms$which_norm"))
+        rel_norms_sym = Symbol("rel_norms$which_norm")
+        rel_norms = @eval($rel_norms_sym)
         for metric in [:rmse, :crps]
-            metric_sym = Symbol("$metric$norm_$alg")
+            metric_sym = Symbol(string(metric) * string(which_norm) * "_" * alg_name)
             metric_dict[metric_sym] = get_Lp(errs, rel_norms, metric)
         end
     end
 
-    # Mass and Entropy
-    mass_alg, entropy_alg = [reduce(hcat, calc_moments(x, f) for x in X) for f in [abs, burgers_entropy]]
+    # Mass, Entropy, and TV
+    tv_alg = reduce(hcat, TV_norm_ensemble(x) for x in X)
+    mass_alg, entropy_alg = map(f -> reduce(hcat, calc_moments(x, f) for x in X), [abs, advection_entropy])
     metric_dict[:mass] = mass_alg
     metric_dict[:entropy] = entropy_alg
+    metric_dict[:tv_norm] = tv_alg
 end
 
 # %%
@@ -293,15 +297,17 @@ jldopen(joinpath(data_path, "burgers_" * string(now()) * ".jld2"), "w") do file
 
     filter_group = JLD2.Group(file, "filters")
     metric_group = JLD2.Group(file, "metrics")
-    metric_group[:true_mass] = mass_true
-    metric_group[:true_entropy] = entropy_true
+    metric_group["true_mass"] = mass_true
+    metric_group["true_entropy"] = entropy_true
+    metric_group["true_tv_norm"] = TVN_true
     for alg in ["locenkf", "hlocenkf"]
         metric_subgroup = JLD2.Group(metric_group, alg)
-        metric_dict = @eval($Symbol("metrics_$alg"))
+        metric_alg = Symbol("metrics_$alg")
+        metric_dict = @eval($metric_alg)
         for key in keys(metric_dict)
             metric_subgroup[string(key)] = metric_dict[key]
         end
-        X_alg = Symbol("X_" * alg)
+        X_alg = Symbol("X_$alg")
         filter_group[string(X_alg)] = @eval($X_alg)
     end
 end;
