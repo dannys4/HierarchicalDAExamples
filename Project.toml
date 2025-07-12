@@ -21,6 +21,7 @@ Trixi = "a7f1ee26-1774-49b1-8366-f1abc58fbfcb"
 
 [sources]
 HierarchicalDA = {rev = "dannys4/pkg", url = "https://github.com/dannys4/2025_GSBL_DA_dev"}
+Trixi = {rev = "move_oneto_v_0_9", url = "https://github.com/dannys4/Trixi.jl"}
 TransportBasedInference2 = {rev = "main", url = "https://github.com/dannys4/TransportBasedInference2.jl"}
 
 [compat]
