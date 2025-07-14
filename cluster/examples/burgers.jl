@@ -253,10 +253,10 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_sym = Symbol("metrics_$alg_name")
     metric_dict = @eval($metric_sym)
     X_sym = Symbol("X_$alg_name")
-    X = @eval($X_sym)
+    X_traj = @eval($X_sym)
     for which_norm in [1, 2]
         norm = Symbol("norm$which_norm")
-        errs = get_errs(X, norm)
+        errs = get_errs(X_traj, norm)
         rel_norms_sym = Symbol("rel_norms$which_norm")
         rel_norms = @eval($rel_norms_sym)
         for metric in [:rmse, :crps]
@@ -266,8 +266,8 @@ for alg_name in ["locenkf", "hlocenkf"]
     end
 
     # Mass, Entropy, and TV
-    tv_alg = reduce(hcat, TV_norm_ensemble(x) for x in X)
-    mass_alg, entropy_alg = map(f -> reduce(hcat, calc_moments(x, f) for x in X), [abs, advection_entropy])
+    tv_alg = reduce(hcat, TV_norm_ensemble(x) for x in X_traj)
+    mass_alg, entropy_alg = map(f -> reduce(hcat, calc_moments(x, f) for x in X_traj), [abs, advection_entropy])
     metric_dict[:mass] = mass_alg
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg

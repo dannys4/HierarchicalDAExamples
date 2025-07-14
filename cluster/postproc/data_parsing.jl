@@ -14,10 +14,11 @@
 # ---
 
 # %%
-using Pkg; Pkg.activate(joinpath(@__DIR__, ".."))
+using Pkg;
+Pkg.activate(joinpath(@__DIR__, ".."));
 
 # %%
-using DataFrames, JLD2, Distributions, ProgressMeter, HierarchicalDA
+using DataFrames, JLD2, Distributions, ProgressMeter, HierarchicalDA, UUIDs, Random
 
 # %%
 if length(ARGS) < 2
@@ -30,8 +31,8 @@ if !ispath(data_path) || !isabspath(data_path)
     ArgumentError("Expected valid absolute path argument, got $data_path")
 end
 
-file_path = joinpath(@__DIR__, "data", filename)
-file_prepath = joinpath(split(file_path,"/")[1:end-1]...)
+file_path = joinpath(@__DIR__, "data", strip(filename))
+file_prepath = joinpath(split(file_path, "/")[1:end-1]...)
 if !ispath(file_prepath)
     ArgumentError("Expected valid filename path, got $filename")
 end
@@ -63,45 +64,55 @@ end
 
 DEFAULT_KEEP_PARAMS = ["data_parameters", "filter_parameters", "GSBL_parameters"]
 
-function create_rows(file::JLD2.JLDFile,
-    ::Type{AcceptableType}=Union{<:Real,<:AbstractString};
+function process_file(file::JLD2.JLDFile,
+    ::Type{AcceptableType}=Union{<:Real,<:AbstractString,<:AbstractArray{<:Real}};
     keep_params=DEFAULT_KEEP_PARAMS,
     metrics_group="metrics",
     preproc!::Function=Returns(nothing)) where {AcceptableType}
 
-    row = Pair{Symbol,AcceptableType}[]
-    preproc!(row, file)
+    uuid = string(uuid4(Random.GLOBAL_RNG))
+    PairT = Pair{Symbol,AcceptableType}
+    params_row = PairT[:id=>uuid]
+    preproc!(params_row, file)
     for group_str in keep_params
         group = file[group_str]
         for key in keys(group)
             val = group[key]
             if val isa AcceptableType
-                push!(row, Symbol(key) => group[key])
+                push!(params_row, Symbol(key) => group[key])
             else
-                append!(row, flatten_properties(AcceptableType, group[key], string(key)))
+                append!(params_row, flatten_properties(AcceptableType, group[key], string(key)))
             end
         end
     end
-    rows = NamedTuple[]
+    truth_row = PairT[:id=>uuid]
+    alg_rows = Vector{PairT}[]
     metrics = file[metrics_group]
-    for algorithm in keys(metrics)
-        row_alg = deepcopy(row)
-        push!(row_alg, :algorithm => algorithm)
-        for metric in keys(metrics[algorithm])
-            push!(row_alg, Symbol(metric) => metrics[algorithm][metric])
+
+    for metric_key in keys(metrics)
+        metric_val = metrics[metric_key]
+        if metric_val isa JLD2.Group
+            row_alg = Pair{Symbol,AcceptableType}[:id=>uuid, :algorithm=>metric_key]
+            for metric in keys(metric_val)
+                metric_name = split(metric, "_")[1] # Some things are (metric)_(alg_name)
+                push!(row_alg, Symbol(metric_name) => metric_val[metric])
+            end
+            push!(alg_rows, row_alg)
+        else
+            push!(truth_row, Symbol(metric_key) => metric_val)
         end
-        push!(rows, NamedTuple(row_alg))
     end
-    rows
+    NamedTuple(truth_row), NamedTuple.(alg_rows), NamedTuple(params_row)
 end
 
 # %%
-df = DataFrame()
+df_truth, df_algs, df_params = DataFrame(), DataFrame(), DataFrame()
 @showprogress "Collating files..." for filename in readdir(data_path)
-    local rows
-    rows_curry = file -> create_rows(file)
+    local truth_row, alg_rows, params_row
     try
-        rows = jldopen(rows_curry, joinpath(data_path, filename), "r")
+        jldopen(joinpath(data_path, filename), "r") do file
+            truth_row, alg_rows, params_row = process_file(file)
+        end
     catch e
         if e isa JLD2.InvalidDataException || e isa EOFError
             @warn "Problematic file $filename, ignoring..."
@@ -109,8 +120,15 @@ df = DataFrame()
             rethrow(e)
         end
     else
-        append!(df, rows)
+        push!(df_truth, truth_row)
+        try
+            append!(df_algs, alg_rows)
+        catch e
+            @info "" propertynames.(alg_rows)
+            rethrow(e)
+        end
+        push!(df_params, params_row)
     end
 end
 
-@save file_path df
+@save file_path df_truth df_algs df_params
