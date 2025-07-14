@@ -5,7 +5,7 @@ import os
 import subprocess
 import copy
 
-script_dir = os.path.dirname(__file__)
+script_dir = os.path.join(os.path.dirname(__file__),'..')
 
 examples = [name[:-3] for name in os.listdir(
     os.path.join(script_dir,'examples')) if name.endswith('.jl')]

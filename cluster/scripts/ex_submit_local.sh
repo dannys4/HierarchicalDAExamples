@@ -9,7 +9,7 @@
 #SBATCH --mem=10G
 
 export IN_DATA_PATH=/pool001/$USER/HDA/linear_advection
-export PROJ_PATH=$PWD
+export PROJ_PATH=$PWD/..
 export RUN_CMD=./run_example
 export JULIA_CPU_TARGET="generic;znver3,clone_all;znver4,base(1)"
 ./ex_command.sh
