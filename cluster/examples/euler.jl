@@ -193,15 +193,15 @@ ode_solver = SSPRK43(stage_limiter!)
 data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, cfl=0.9)
 
 # %%
-quad_wts = vec(sys_euler.mesh.md.wJq)
-ents = zeros(size(data.xt, 2))
-for (t, x) in enumerate(eachcol(data.xt))
-    u_state = reshape(x, :, 3)
-    ents[t] = quad_wts'map(u -> Trixi.entropy(vec(u), sys_euler.equations), eachrow(u_state))
+make_figs && with_theme(my_theme) do
+    quad_wts = vec(sys_euler.mesh.md.wJq)
+    ents = zeros(size(data.xt, 2))
+    for (t, x) in enumerate(eachcol(data.xt))
+        u_state = reshape(x, :, 3)
+        ents[t] = quad_wts'map(u -> Trixi.entropy(vec(u), sys_euler.equations), eachrow(u_state))
+    end
+    display(lines(data.tt, ents, axis=(; title="Entropy of Shu-Osher shock", xlabel=L"t", ylabel=L"e")))
 end
-
-# %%
-make_figs && display(lines(data.tt, ents, axis=(; title="Entropy of Shu-Osher shock", xlabel=L"t", ylabel=L"e")));
 
 # %%
 make_figs && with_theme(my_theme) do

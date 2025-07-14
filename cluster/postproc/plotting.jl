@@ -22,19 +22,57 @@ using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie
 
 # %%
 data_path = joinpath(@__DIR__, "data")
-filename = "linear_advection_df.jld2"
+example_name = "shu_osher"
+filename = example_name * "_df.jld2"
 
 # %%
-@load joinpath(data_path, filename) df
-
+@load joinpath(data_path, filename) df_truth df_algs df_params
 
 # %%
-# Filter rows
-keep_rows = df[!, :tf] .== 10.
-df = df[keep_rows, :]
+df = leftjoin(df_algs, df_params, on=:id)
+leftjoin!(df, df_truth, on=:id)
 
+##
+with_theme(theme_minimal(), linewidth=3) do
+    cols = Makie.wong_colors()
+    for (truth_sym, qoi_sym, ylab) in [(:true_tv_norm, :tv, "TV norm"), (:true_mass, :mass, "Mass"), (:true_entropy, :entropy, "Entropy")]
+        qoi_true = df[1, truth_sym]
+        qoi_gsbl = []
+        qoi_enkf = []
+        for row in eachrow(df)
+            which_push = row[:algorithm] == "locenkf" ? qoi_enkf : qoi_gsbl
+            push!(which_push, row[qoi_sym])
+        end
+        push!(Main.AA, (qoi_true, qoi_gsbl, qoi_enkf))
+        qoi_enkf_mat = reduce(vcat, qoi_enkf)
+        qoi_enkf_mat[isnan.(qoi_enkf_mat)] .= Inf
+        quants_enkf = quantile.(eachcol(qoi_enkf_mat), ([0.5, 0.1, 0.9],))
+        medians_enkf = first.(quants_enkf)[2:end]
+        bars_enkf = map(x -> (x[2], x[3]), quants_enkf)[2:end]
+
+        qoi_gsbl_mat = reduce(vcat, qoi_gsbl)
+        qoi_gsbl_mat[isnan.(qoi_gsbl_mat)] .= Inf
+        quants_gsbl = quantile.(eachcol(qoi_gsbl_mat), ([0.5, 0.1, 0.9],))
+        medians_gsbl = first.(quants_gsbl)[2:end]
+        bars_gsbl = map(x -> (x[2], x[3]), quants_gsbl)[2:end]
+        times = 2 * (1 .+ (1:length(bars_gsbl))) / (length(bars_gsbl) + 1)
+        fig = Figure()
+        ax = Axis(fig[1, 1], xlabel="Time", ylabel=ylab)
+        lines!(times, medians_enkf, color=cols[1])
+        rangebars!(times, bars_enkf, linewidth=8, color=(cols[1], 0.4), label="EnKF")
+        lines!(times, medians_gsbl, color=cols[2])
+        rangebars!(times, bars_gsbl, linewidth=8, color=(cols[2], 0.4), label="GSBL")
+        lines!(times, qoi_true, linestyle=:dot, color=cols[3], label="truth")
+        axislegend(position=:lt, orientation=:horizontal)
+        fig_name = example_name * "_" * join(split(ylab), "_") * ".pdf"
+        save(joinpath(@__DIR__, "figs", fig_name), fig)
+        display(fig)
+    end
+end
+
+##
 # Filter cols
-rm_names = ["random_seed"]
+rm_names = ["random_seed", "id"]
 df_cols = names(df)
 one_unique = v -> (length(unique(v)) == 1)
 
