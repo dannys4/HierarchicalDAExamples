@@ -1,1 +1,12 @@
 @show ARGS
+using Trixi
+using LinearAlgebra
+using OrdinaryDiffEq
+using HierarchicalDA
+using LinearMaps
+using TransportBasedInference2
+using Distributions
+using SparseArrays
+using JLD2
+using Dates
+using Random
