@@ -13,7 +13,7 @@ examples = [name[:-3] for name in os.listdir(
 
 
 def run_example(jl_path, example, args):
-    subprocess.run([jl_path, os.path.join(
+    subprocess.run([jl_path, "-O3", os.path.join(
         script_dir, "examples", example+".jl"), *args])
 
 

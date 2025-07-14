@@ -8,6 +8,8 @@
 #SBATCH -a 1-12
 #SBATCH --mem=10G
 
-# Run the burgers example two time for three different noise levels and four ensemble sizes (2*3*4=24 trials)
-# Save the data to the pool directory to allow for significant storage, and only simulate to time 0.5 for each trial.
-./run_example burgers -n 2 -- data_path=/pool001/$USER/ tf=0.5 sigma_x_filter=1e-3,1e-2,1e-1, Ne=25,50,75,100
+export IN_DATA_PATH=/pool001/$USER/HDA/linear_advection
+export PROJ_PATH=$PWD
+export RUN_CMD=./run_example
+export JULIA_CPU_TARGET="generic;znver3,clone_all;znver4,base(1)"
+./ex_command.sh
