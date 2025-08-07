@@ -184,10 +184,10 @@ end
 
 # %%
 f0 = SmoothPeriodic(xgrid, alpha_k_f0)
-X0 = zeros(model.Ny + model.Nx, Ne)
+X0 = zeros(model.Nx, Ne)
 for i = 1:Ne
     regenerate!(f0)
-    X0[Ny+1:Ny+Nx, i] = 0.5 * (f0.(xgrid) .+ 1.)
+    X0[:, i] = 0.5 * (f0.(xgrid) .+ 1.)
 end
 
 # %%
@@ -200,7 +200,7 @@ Loc = Localization(Nx, Lrad, Gxx, is_sparse=true)
 ϵxβ_enkf = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
-Cϵ = LinearMap(ϵy.Σ)
+Cϵ = LinearMap(ϵy.Σ, Ny)
 # This CX is replaced with the estimated state cov at each step
 sys_y = ObsSystem(H, Cϵ)
 locenkf = LocEnKF(Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
@@ -213,11 +213,11 @@ X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny
 # Selection of hyper-prior parameters
 # power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
-r_GSBL = r_range[hyperprior_idx] # select parameter 
+r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
 β_range = [1.501, 3.0918, 2.0165, 1.0017];
 β_GSBL = β_range[hyperprior_idx] # shape parameter
-# rate parameters 
+# rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
@@ -369,11 +369,11 @@ make_figs && with_theme(my_theme) do
     tsnap = Observable(t_start)
     cols = Makie.wong_colors()
 
-    #x_tsnap = @lift(data.xt[:, $tsnap])
-    #x_tsnap_plus = @lift(data.xt[:, $tsnap] .+ sigma_x_filter)
-    #y_tsnap = @lift(data.yt[:, $tsnap])
-    #X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
-    #X_locenkf_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
+    x_tsnap = @lift(data.xt[:, $tsnap])
+    x_tsnap_plus = @lift(data.xt[:, $tsnap] .+ sigma_x_filter)
+    y_tsnap = @lift(data.yt[:, $tsnap])
+    X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
+    X_locenkf_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
 
     fig = Figure()
 
