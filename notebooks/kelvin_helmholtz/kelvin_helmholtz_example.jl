@@ -17,6 +17,7 @@
 # %%
 using Pkg
 Pkg.activate(joinpath(@__DIR__, "../.."))
+Pkg.precompile()
 
 # %%
 using Revise
@@ -25,13 +26,12 @@ using FFTW, Distributions, JLD2
 using LinearMaps
 using CairoMakie, Trixi, OrdinaryDiffEq
 using HierarchicalDA, TransportBasedInference2
-using StatProfilerHTML
 
 # %%
 my_theme = Theme()
 
 # %%
-Ncells_dim = 32
+Ncells_dim = 16
 polydeg = 3
 t0, tf = 0., 1.0
 order_PA = 3
@@ -130,7 +130,7 @@ x0_sol = map(xy -> initial_condition_kelvin_helmholtz_instability(xy, 0., equati
 x0 = sol2vec(x0_sol, equations)
 
 # %%
-data = generate_data_trixi(model, x0, Tf, sys_euler; ode_solver, cfl=0.9, record_first=true)
+data = generate_data_trixi(model, x0, Tf, sys_euler; ode_solver, cfl=0.9, record_first=false)
 
 # %%
 L_f0 = 2.0
@@ -142,6 +142,11 @@ f0_col = SmoothPeriodic(grid1d, alpha_f0; L=L_f0, Nvar)
 pos_vars = ["rho", "p"]
 transform_fcn = [var in pos_vars ? exp : identity for var in Trixi.varnames(cons2prim, equations)]
 x0_ens = reduce(hcat, HierarchicalDA.sample_initial_state(f0_row, f0_col, mesh; Nvar, transform_fcn) for _ in 1:Ne)
+noise_level_t0 = 0.05
+for c_idx in CartesianIndices(x0_ens)
+    (state_idx, ens_idx) = Tuple(c_idx)
+    x0_ens[c_idx] = muladd(noise_level_t0, x0_ens[c_idx], (1 - noise_level_t0) * x0[state_idx])
+end
 
 # %%
 Loc = Localization(mesh, Lrad; Nvar, isperiodic=false)
@@ -161,4 +166,15 @@ locenkf = LocEnKF(identity, Ne, ϵy, sys_y, Loc, Δtdyn, Δtobs, isfiltered=true
 
 # %%
 store_state_path = joinpath(@__DIR__, "data")
-X_locenkf = seqassim_trixi(data, 0, filter_inflation, locenkf, x0_ens, model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl=0.5, store_state_path);
+X_locenkf = seqassim_trixi(data, 3, filter_inflation, locenkf, x0_ens, model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl=0.2, store_state_path);
+
+# %%
+ex_sol = vec2sol(X_locenkf[1][:,2], equations, sys_euler.semi)
+sol_true = vec2sol(data.xt[:,3], equations, sys_euler.semi)
+pd_ex = Trixi.PlotData2D(ex_sol, sys_euler.semi)
+pd_true = Trixi.PlotData2D(sol_true, sys_euler.semi)
+
+##
+plot(pd_true)
+plot(pd_ex)
+
