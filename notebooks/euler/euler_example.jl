@@ -16,7 +16,7 @@
 
 # %%
 using Pkg
-Pkg.activate("../..")
+Pkg.activate(joinpath(@__DIR__, "../.."))
 
 # %%
 using Revise
@@ -206,11 +206,11 @@ idx = 4
 ## Selecion of hyper-prior parameters
 # power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
-r = r_range[idx] # select parameter 
+r = r_range[idx] # select parameter
 # shape parameter
 β_range = [1.501, 3.0918, 2.0165, 1.0017];
 β = β_range[idx] # shape parameter
-# rate parameters 
+# rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ = ϑ_range[idx]
 
