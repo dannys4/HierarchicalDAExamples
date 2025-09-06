@@ -155,7 +155,7 @@ Loc = Localization(mesh, Lrad; Nvar, isperiodic=false)
 Cϵ = LinearMap(ϵy.Σ, Ny)
 ĈX = LocalizedEmpiricalCov(x0_ens, Loc; with_matrix=false)
 
-##
+# %%
 CX_init = LinearMaps.FunctionMap{Float64,true}(ĈX, Nx, issymmetric=true)
 sparse_pattern = Int.(filter(!iszero, H * (1:size(H, 2))))
 sys_y = ObsSystem(H, Cϵ, CX_init; use_workspace=true, sparse_pattern);
@@ -169,8 +169,8 @@ store_state_path = joinpath(@__DIR__, "data")
 X_locenkf = seqassim_trixi(data, 3, filter_inflation, locenkf, x0_ens, model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl=0.2, store_state_path);
 
 # %%
-ex_sol = vec2sol(X_locenkf[1][:,2], equations, sys_euler.semi)
-sol_true = vec2sol(data.xt[:,3], equations, sys_euler.semi)
+ex_sol = vec2sol(X_locenkf[1][:, 2], equations, sys_euler.semi)
+sol_true = vec2sol(data.xt[:, 3], equations, sys_euler.semi)
 pd_ex = Trixi.PlotData2D(ex_sol, sys_euler.semi)
 pd_true = Trixi.PlotData2D(sol_true, sys_euler.semi)
 
