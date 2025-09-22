@@ -41,7 +41,7 @@ update_theme!(my_theme, linewidth=3.)
 equations = CompressibleEulerEquations1D(1.4)
 
 # %%
-polydeg = 2
+polydeg = 3
 Ncells = 200
 Nvar = 3
 
@@ -97,12 +97,13 @@ tf = t0 + Tf * Δtobs
 π0 = MvNormal(zeros(Nx), Matrix(1.0 * I, Nx, Nx))
 
 # %%
-σx_true = 0.0#Δtobs*1.0
-@show σx_true
+σx_data = 0.0
+σx_filter = 0.02
+@show σx_data
 
 σy = 0.1
 
-ϵx_true = AdditiveInflation(Nx, zeros(Nx), σx_true)
+ϵx_true = AdditiveInflation(Nx, zeros(Nx), σx_data)
 ϵx_filter = AdditiveInflation(Nx, zeros(Nx), σx_filter)
 
 ϵy = AdditiveInflation(Ny, zeros(Ny), σy);
@@ -122,17 +123,17 @@ f0 = SmoothPeriodic(xgrid, αk; L=10.0, Nvar=Nvar)
 xshuosher = zeros(Nx)
 x0 = zeros(Nx)
 
-for (i, xi) in enumerate(xgrid)
-    x̃i = cons2prim(initial_condition_shu_osher(xi, 0.0, sys_euler.equations), sys_euler.equations)
-    for k = 1:Nvar
-        xshuosher[Nxvar*(k-1)+i] = x̃i[k]
-    end
-end
-
-x0 = xshuosher;# + 0.01*f0(xgrid);
+# for (i, xi) in enumerate(xgrid)
+#     x̃i = cons2prim(initial_condition_shu_osher(xi, 0.0, sys_euler.equations), sys_euler.equations)
+#     for k = 1:Nvar
+#         xshuosher[Nxvar*(k-1)+i] = x̃i[k]
+#     end
+# end
+x0_quad = map(x -> initial_condition_shu_osher(x, 0., sys_euler.equations), sys_euler.mesh.md.xq)
+x0 = sol2vec(x0_quad, sys_euler.equations)# + 0.01*f0(xgrid);
 
 # %%
-thresholds = (5e-6, 5e-6)
+thresholds = (5e-3, 5e-3)
 variables = (Trixi.density, Trixi.pressure)
 stage_limiter! = PositivityPreservingLimiterZhangShu(thresholds=thresholds,
     variables=variables)
@@ -142,7 +143,7 @@ ode_solver = SSPRK43(stage_limiter!)
 # ode_solver = CarpenterKennedy2N54(stage_limiter!, williamson_condition=false)
 
 # %%
-data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, cfl=0.9)
+data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, cfl=0.2)
 
 # %%
 false && with_theme(my_theme) do
@@ -255,7 +256,6 @@ Lrad = 7
 Loc = Localization(Lrad, Gxx, Gxy, Gxx)
 
 # %%
-σx_filter = 0.02
 β = 1.00
 filter_inflation = MultiAddInflation(Nx, β, zeros(Nx), σx_filter)
 

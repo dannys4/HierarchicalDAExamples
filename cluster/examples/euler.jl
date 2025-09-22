@@ -38,7 +38,7 @@ t0 = 0.0
 tf = 2.0
 
 delta_y = 100
-density_thresh, pressure_thresh = 5e-6, 5e-6
+density_thresh, entropy_thresh = 5e-6, 5e-6
 sigma_y = 0.1
 sigma_x_data = 0.0
 
@@ -48,9 +48,9 @@ sigma_x_data = 0.0
 # %%
 alpha_k_f0, L_f0 = 1.0, 10.0
 sigma_x_filter = 0.02
-beta_infl = 1.00
+beta_infl = 1.02
 Lrad = 7
-Ne = 40
+Ne = 100
 cfl = 0.9
 
 # %% [markdown]
@@ -88,18 +88,20 @@ using Pkg
 Pkg.activate(proj_path)
 
 # %%
-using Trixi
-using LinearAlgebra
-using OrdinaryDiffEq
-using HierarchicalDA
-using LinearMaps
-using TransportBasedInference2
-using Distributions
-using SparseArrays
-using JLD2
-using Dates
-using Random
-make_figs && using CairoMakie
+begin # Execute all loads as part of one expr
+    using Trixi
+    using LinearAlgebra
+    using OrdinaryDiffEq
+    using HierarchicalDA
+    using LinearMaps
+    using TransportBasedInference2
+    using Distributions
+    using SparseArrays
+    using JLD2
+    using Dates
+    using Random
+    make_figs && using CairoMakie
+end
 
 # %%
 make_figs && (my_theme = theme_minimal())
@@ -169,28 +171,21 @@ model = Model(Nx, Ny, delta_t_dyn, delta_t_obs, ϵx_true, ϵy, π0, 0, 0, 0, F);
 f0 = SmoothPeriodic(xgrid, alpha_k_f0; L=L_f0, Nvar=Nvar)
 
 # %%
-xshuosher = zeros(Nx)
-x0 = zeros(Nx)
-
-for (i, xi) in enumerate(xgrid)
-    x̃i = cons2prim(initial_condition_shu_osher(xi, 0.0, sys_euler.equations), sys_euler.equations)
-    for k = 1:Nvar
-        xshuosher[Nxvar*(k-1)+i] = x̃i[k]
-    end
-end
-
-x0 = xshuosher;# + 0.01*f0(xgrid);
+# Gives me initial condition in cons
+x0_quad = map(x -> initial_condition_shu_osher(x, 0., sys_euler.equations), sys_euler.mesh.md.xq)
+# x0 is in prims
+x0 = sol2vec(x0_quad, sys_euler.equations)# + 0.01*f0(xgrid);
 
 # %%
-thresholds = (density_thresh, pressure_thresh)
-variables = (Trixi.density, Trixi.pressure)
+thresholds = (density_thresh, entropy_thresh)
+variables = (Trixi.density, Trixi.entropy)
 stage_limiter! = PositivityPreservingLimiterZhangShu(thresholds=thresholds,
     variables=variables)
 ode_solver = SSPRK43(stage_limiter!)
 
 # %%
 @info "Generating data..."
-data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, cfl=0.9)
+data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, cfl=0.2)
 
 # %%
 make_figs && with_theme(my_theme) do
@@ -266,27 +261,45 @@ end;
 # Selection of hyper-prior parameters
 # power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
-r_GSBL = r_range[hyperprior_idx] # select parameter 
+r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
 β_range = [1.501, 3.0918, 2.0165, 1.0017];
 β_GSBL = β_range[hyperprior_idx] # shape parameter
-# rate parameters 
+# rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
-X = zeros(model.Ny + model.Nx, Ne)
-
-for i = 1:Ne
+pos_vars = ["rho", "rho_e"]
+pos_var_flags = in.(Trixi.varnames(cons2cons, equations), (pos_vars,))
+X0 = zeros(model.Nx, Ne)
+noise_level_lin, noise_level_log = 0., 0.
+@inbounds for i = 1:Ne
     regenerate!(f0)
-    X[Ny+1:Ny+Nx, i] = max.(1e-5, xshuosher + 0.1 * f0(xgrid))#initial_condition(αk, Δx, Nx)
+    X0_i = reshape(@view(X0[:, i]), Nvar, size(x0_quad)...)
+    out_f0 = f0(xgrid)#initial_condition(αk, Δx, Nx)
+    out_f0 = permutedims(reshape(out_f0, size(x0_quad)..., Nvar), (3, 1, 2))
+    copy!(X0_i, out_f0)
+    for c_idx in CartesianIndices(x0_quad)
+        node_idx, elem_idx = Tuple(c_idx)
+        x0_quad_node = x0_quad[c_idx]
+        for var_idx in 1:Nvar
+            new_ens_val = 0.
+            if pos_var_flags[var_idx]
+                new_ens_val = exp(log(x0_quad_node[var_idx]) + noise_level_log * X0_i[var_idx, node_idx, elem_idx])
+            else
+                new_ens_val = x0_quad_node[var_idx] + noise_level_lin * X0_i[var_idx, node_idx, elem_idx]
+            end
+            X0_i[var_idx, node_idx, elem_idx] = new_ens_val
+        end
+    end
 end
 
 # %%
 CX = LinearMap(collect(1. * I(Nx)))
-Cϵ = LinearMap(ϵy.Σ)
+Cϵ = LinearMap(ϵy.Σ, size(H, 1))
 sys_y = ObsSystem(H, Cϵ)
 
 theta_init_vec = fill(theta_init, Ns)
@@ -311,7 +324,7 @@ local X_locenkf
 @info "Performing EnKF..."
 try
     global X_locenkf
-    X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
+    X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, X0, model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
     global X_locenkf
     @warn "Localized EnKF failed for Shu-Osher, $(typeof(e))"
@@ -325,7 +338,7 @@ hlocenkf = HLocEnKF(x -> max.(x, 1e-6), Ne, ϵy, sys_ys, Loc, dist, theta_init_v
 local X_hlocenkf, θ_hlocenkf
 try
     global X_hlocenkf, θ_hlocenkf
-    X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
+    X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, X0, model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
     global X_hlocenkf, θ_hlocenkf
     @warn "GSBL localized EnKF failed for Shu-Osher, $(typeof(e))"
