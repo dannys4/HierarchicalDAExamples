@@ -232,7 +232,7 @@ hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, del
 
 # %%
 @info "Performing GSBL EnKF..."
-ϵxbeta_filter = MultiAddInflation(Nx, 1.02, zeros(Nx), 1e-2)
+ϵxbeta_filter = MultiAddInflation(Nx, 1.02, zeros(Nx), 1e-3)
 # Loc = Localization(Nx, Lrad, metric, is_sparse=true)
 X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 

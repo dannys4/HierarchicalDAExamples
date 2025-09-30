@@ -37,8 +37,8 @@ delta_y = 25
 delta_t_dyn = 0.05
 delta_t_obs = 0.25
 t0, tf = 0.0, 10.0
-sigma_x_data = 1e-5
-sigma_y = 0.2
+sigma_x_data = 0.
+sigma_y = 5e-2
 
 # %% [markdown]
 # ### Parameters for Filtering
@@ -231,14 +231,14 @@ dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
 order_PA = 3
-PA_offset = ceil(Int, order_PA / 2)
-Ns = Nx - 2PA_offset
-PA = PolyAnnil(xgrid, order_PA; istruncated=true)
+# PA_offset = ceil(Int, order_PA / 2)
+# Ns = Nx - 2PA_offset
+PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(coordinates_min, coordinates_max))
 S = LinearMaps.LinearMap(PA.P)
-xgrid_S = xgrid[PA_offset+1:end-PA_offset];
+xgrid_S = xgrid #xgrid[PA_offset+1:end-PA_offset];
 
 # %%
-theta_init_vec = fill(theta_init, Ns)
+theta_init_vec = fill(theta_init, length(xgrid_S))
 Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
@@ -349,11 +349,6 @@ end
 # %%
 make_figs && with_theme(my_theme) do
     tsnap = length(X_hlocenkf) - 1
-    #x_tsnap = @lift(data.xt[:, $tsnap])
-    #y_tsnap = @lift(data.yt[:, $tsnap])
-    #X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
-    #X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
-    #theta_tsnap = @lift(θhist[$tsnap+1])
     x_tsnap = data.xt[:, tsnap]
     X_hlocenkf_tsnap = vec(mean(X_hlocenkf[tsnap+1]; dims=2))
     X_ens_tsnap = [X_hlocenkf[tsnap+1][:, j] for j in 1:Ne]
@@ -370,7 +365,7 @@ make_figs && with_theme(my_theme) do
     lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
     lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
     # lines!(ax1, xgrid, ys, linewidth=3, label="State")
-    scatter!(ax1, xgrid[PA_offset+1:end-PA_offset], theta_tsnap, label="θ", markersize=5)
+    scatter!(ax1, xgrid_S, theta_tsnap, label="θ", markersize=5)
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.4))
     end
@@ -378,91 +373,67 @@ make_figs && with_theme(my_theme) do
 
     axislegend(ax1)
 
-
-    # framerate = 10
-    # timestamps = range(t_start, Tf, step=1)
-
-    # anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
-    #     tsnap[] = t
-    # end
-    # save(joinpath(@__DIR__, "figs", "assim_hlenkf.mp4"), anim)
-    # anim
     display(fig)
 end
 
 
 # %%
 make_figs && with_theme(my_theme) do
+    cols = Makie.wong_colors()
     t_start = 4
     tsnap = Observable(t_start)
-    #x_tsnap = @lift(data.xt[:, $tsnap])
-    #y_tsnap = @lift(data.yt[:, $tsnap])
-    #X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
-    #X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
-    #theta_tsnap = @lift(θhist[$tsnap+1])
-    cols = Makie.wong_colors()
-
+    x_tsnap = @lift(data.xt[:, $tsnap])
+    y_tsnap = @lift(data.yt[:, $tsnap])
+    X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
+    X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
+    theta_tsnap = @lift(θhist[$tsnap+1])
     fig = Figure()
-
     ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
 
-    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
     lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
     lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
-    # lines!(ax1, xgrid, ys, linewidth=3, label="State")
-    lines!(ax1, xgrid[PA_offset+1:end-PA_offset], theta_tsnap, linewidth=3, label="θ")
+    scatter!(ax1, xgrid_S, theta_tsnap, label="θ")
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
     end
     scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
-
     axislegend(ax1)
-
-
     framerate = 10
     timestamps = range(t_start, Tf, step=1)
 
     anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
         tsnap[] = t
     end
-    save(joinpath(@__DIR__, "figs", "assim_hlenkf.mp4"), anim)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "assim_hlenkf.mp4"), anim)
     anim
 end
 
 # %%
 make_figs && with_theme(my_theme) do
-    t_start = 3
-    tsnap = Observable(t_start)
     cols = Makie.wong_colors()
-
+    t_start = 4
+    tsnap = Observable(t_start)
     x_tsnap = @lift(data.xt[:, $tsnap])
-    x_tsnap_plus = @lift(data.xt[:, $tsnap] .+ sigma_x_filter)
     y_tsnap = @lift(data.yt[:, $tsnap])
     X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
-    X_locenkf_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
-
+    X_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
     fig = Figure()
+    ax1 = Axis(fig[1, 1], title="Localized EnKF")
 
-    ax1 = Axis(fig[1, 1], title="Unadjusted EnKF")
-
+    lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="LocEnKF")
     lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
-    lines!(ax1, xgrid, x_tsnap_plus, linewidth=3, label="Truth+σ")
-    lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="EnKF")
     for j in 1:Ne
-        lines!(ax1, xgrid, X_locenkf_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
     end
     scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
-
     axislegend(ax1)
-
-
     framerate = 10
     timestamps = range(t_start, Tf, step=1)
 
     anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
         tsnap[] = t
     end
-    save(joinpath(@__DIR__, "figs", "assim_enkf.mp4"), anim)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "assim_lenkf.mp4"), anim)
     anim
 end
 
