@@ -23,12 +23,15 @@ data_path = joinpath(@__DIR__, "data")
 make_figs = false
 random_seed = rand(UInt)
 
+proj_path = joinpath(@__DIR__, "../..")
+make_figs = true
+
 # %% [markdown]
 # ### Data generating parameters
 
 # %%
-polydeg = 2
-Ncells = 200
+polydeg = 3
+Ncells = 100
 Nvar = 3
 
 delta_t_dyn = 0.02
@@ -38,7 +41,7 @@ t0 = 0.0
 tf = 2.0
 
 delta_y = 100
-density_thresh, entropy_thresh = 5e-6, 5e-6
+density_thresh, pressure_thresh = 5e-6, 5e-6
 sigma_y = 0.1
 sigma_x_data = 0.0
 
@@ -50,7 +53,7 @@ alpha_k_f0, L_f0 = 1.0, 10.0
 sigma_x_filter = 0.02
 beta_infl = 1.02
 Lrad = 7
-Ne = 100
+Ne = 50
 cfl = 0.9
 
 # %% [markdown]
@@ -59,7 +62,7 @@ cfl = 0.9
 # %%
 order_PA = 3
 hyperprior_idx = 4
-theta_init = 1.0
+theta_init = 1.
 Niter = 5
 
 # %%
@@ -132,18 +135,17 @@ PA = PolyAnnil(xgrid, order_PA; Nvar=Nvar, istruncated=true)
 
 @assert size(PA.P) == (Ns, Nx)
 
-S = LinearMaps.LinearMap(PA.P)
-PA_offset = ceil(Int, order_PA / 2)
-xs = xgrid[PA_offset+1:end-PA_offset];
+S = LinearMaps.LinearMap(PA.P / Nvar)
+xs = xgrid[PA_skip+1:end-PA_skip];
 
 # %%
-idxρ = 1:length(xgrid)
-idxv = length(xgrid) .+ collect(1:length(xgrid))
-idxp = 2 * length(xgrid) .+ collect(1:length(xgrid));
+idxρ = 3 * (0:(length(xgrid)-1)) .+ 1
+idxv = 3 * (0:(length(xgrid)-1)) .+ 2
+idxp = 3 * (0:(length(xgrid)-1)) .+ 3
 
-idxρy = 1:ceil(Int64, Nx / (delta_y * Nvar))
-idxvy = ceil(Int64, Nx / (delta_y * Nvar)) .+ collect(1:ceil(Int64, Nx / (delta_y * Nvar)))
-idxpy = 2 * ceil(Int64, Nx / (delta_y * Nvar)) .+ collect(1:ceil(Int64, Nx / (delta_y * Nvar)))
+idxρy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 1
+idxvy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 2
+idxpy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 3
 
 idxρs = idxρ[PA_skip+1:end-PA_skip]
 idxvs = idxv[PA_skip+1:end-PA_skip]
@@ -151,7 +153,6 @@ idxps = idxp[PA_skip+1:end-PA_skip];
 
 # %%
 Tf = round(Int, (tf - t0) / delta_t_obs)
-
 π0 = MvNormal(zeros(Nx), Matrix(1.0 * I, Nx, Nx))
 
 # %%
@@ -161,8 +162,9 @@ Tf = round(Int, (tf - t0) / delta_t_obs)
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y);
 
 # %%
-h(x, t) = x[unroll(1:delta_y:length(xgrid), length(xgrid), Nvar)]
-H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[unroll(1:delta_y:length(xgrid), length(xgrid), Nvar), :]))
+all_idxy = sort(reduce(vcat, Nvar * (0:delta_y:(length(xgrid)-1)) .+ i for i in 1:3))
+h(x, t) = x[all_idxy]
+H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[all_idxy, :]))
 F = StateSpace(x -> x, h)
 
 model = Model(Nx, Ny, delta_t_dyn, delta_t_obs, ϵx_true, ϵy, π0, 0, 0, 0, F);
@@ -177,18 +179,19 @@ x0_quad = map(x -> initial_condition_shu_osher(x, 0., sys_euler.equations), sys_
 x0 = sol2vec(x0_quad, sys_euler.equations)# + 0.01*f0(xgrid);
 
 # %%
-thresholds = (density_thresh, entropy_thresh)
-variables = (Trixi.density, Trixi.entropy)
+thresholds = (density_thresh, pressure_thresh)
+variables = (Trixi.density, Trixi.pressure)
 stage_limiter! = PositivityPreservingLimiterZhangShu(thresholds=thresholds,
     variables=variables)
 ode_solver = SSPRK43(stage_limiter!)
+# ode_solver = SSPRK43()
 
 # %%
 @info "Generating data..."
 data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, cfl=0.2)
 
 # %%
-make_figs && with_theme(my_theme) do
+false && with_theme(my_theme) do
     quad_wts = vec(sys_euler.mesh.md.wJq)
     ents = zeros(size(data.xt, 2))
     for (t, x) in enumerate(eachcol(data.xt))
@@ -213,7 +216,7 @@ make_figs && with_theme(my_theme) do
 end;
 
 # %%
-make_figs && with_theme(my_theme) do
+false && with_theme(my_theme) do
     N_T = length(data.tt)
     p_t = t -> data.xt[idxps, t]
     ρ_t = t -> data.xt[idxρs, t]
@@ -272,30 +275,29 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
-pos_vars = ["rho", "rho_e"]
+pos_vars = ["rho", "p"]
 pos_var_flags = in.(Trixi.varnames(cons2cons, equations), (pos_vars,))
-X0 = zeros(model.Nx, Ne)
-noise_level_lin, noise_level_log = 0., 0.
-@inbounds for i = 1:Ne
-    regenerate!(f0)
-    X0_i = reshape(@view(X0[:, i]), Nvar, size(x0_quad)...)
-    out_f0 = f0(xgrid)#initial_condition(αk, Δx, Nx)
-    out_f0 = permutedims(reshape(out_f0, size(x0_quad)..., Nvar), (3, 1, 2))
-    copy!(X0_i, out_f0)
-    for c_idx in CartesianIndices(x0_quad)
-        node_idx, elem_idx = Tuple(c_idx)
-        x0_quad_node = x0_quad[c_idx]
-        for var_idx in 1:Nvar
-            new_ens_val = 0.
-            if pos_var_flags[var_idx]
-                new_ens_val = exp(log(x0_quad_node[var_idx]) + noise_level_log * X0_i[var_idx, node_idx, elem_idx])
-            else
-                new_ens_val = x0_quad_node[var_idx] + noise_level_lin * X0_i[var_idx, node_idx, elem_idx]
-            end
-            X0_i[var_idx, node_idx, elem_idx] = new_ens_val
+
+##
+noise_proportion = 0.25
+X0 = positivity_preserving_noise1d(f0, initial_condition_shu_osher, Ne, sys_euler, pos_vars, noise_proportion)
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure(size=(2100, 700))
+    axs = [Axis(fig[1, i], aspect=1., title=Trixi.varnames(cons2prim, equations)[i]) for i in 1:Nvar]
+    num_ens_viz = 10
+    for ens_idx in 1:num_ens_viz
+        X_sample = @view X0[:, ens_idx]
+        for (i, idx_i) in enumerate([(idxρ, idxρy), (idxv, idxvy), (idxp, idxpy)])
+            idx_x, idx_y = idx_i
+            lines!(axs[i], xgrid, X_sample[idx_x], linewidth=3)
+            # lines!(axi, xgrid, X_sample[idx_x, div(end, 3)], linewidth=3)
         end
     end
-end
+    save(joinpath(@__DIR__, "figs", "initial_ensemble.pdf"), fig)
+    display(fig)
+end;
 
 # %%
 CX = LinearMap(collect(1. * I(Nx)))
@@ -310,59 +312,75 @@ sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 yidx = 1:delta_y:Nx
 idx = vcat(collect(1:length(yidx))', collect(yidx)')
 
-# # Create Localization structure
-@inline Gxx(i, j) = cartesianmetric(mod(i, Nxvar), mod(j, Nxvar))
-Loc = Localization(Nx, Lrad, Gxx, is_sparse=true)
+# Create Localization structure
+metric = (i, j) -> cartesianmetric((i - 1) ÷ Nvar + 1, (j - 1) ÷ Nvar + 1)
+Loc = Localization(Nx, Lrad, metric, is_sparse=true, is_herm=false)
 
 filter_inflation = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
-locenkf = LocEnKF(x -> max.(x, 1e-6), Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=true)
+function filtering_fcn!(x)
+    pressure = @view x[idxp]
+    density = @view x[idxρ]
+    pressure .= max.(pressure, (1e-6,))
+    density .= max.(density, (1e-6,))
+    nothing
+end
+
+# %%
+locenkf = LocEnKF(filtering_fcn!, Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=true)
+
+# %%
+# X_locenkf = seqassim_trixi(data, 2, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl=0.2)
 
 # %%
 local X_locenkf
 @info "Performing EnKF..."
 try
     global X_locenkf
-    X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, X0, model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
+    X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
     global X_locenkf
     @warn "Localized EnKF failed for Shu-Osher, $(typeof(e))"
 end
 
 # %%
-@info "Performing GSBL EnKF..."
-hlocenkf = HLocEnKF(x -> max.(x, 1e-6), Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isfiltered=true)
+hlocenkf = HLocEnKF(filtering_fcn!, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter=20, θinit=theta_init, isfiltered=false)
+
+# %%
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 1, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 
 # %%
 local X_hlocenkf, θ_hlocenkf
+@info "Performing GSBL EnKF..."
 try
     global X_hlocenkf, θ_hlocenkf
-    X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, X0, model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
+    X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
     global X_hlocenkf, θ_hlocenkf
     @warn "GSBL localized EnKF failed for Shu-Osher, $(typeof(e))"
 end
 
 # %%
-mesh_weights_state = vec(sys_euler.mesh.md.wJq)
-mesh_weights = repeat(mesh_weights_state, nvariables(equations))
-calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
-weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
-weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
-rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
-rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
-get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
-get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
-euler_entropy = u -> Trixi.entropy(u, equations)
-euler_qoi_member = (u, fcn) -> mesh_weights_state' * fcn.(eachrow(reshape(u, :, nvariables(equations))), (equations,))
-euler_qoi_ens = (u_ens, fcn) -> euler_qoi_member.(eachcol(u_ens), fcn)
-mass_true, entropy_true = euler_qoi_ens(data.xt, Trixi.density), euler_qoi_ens(data.xt, Trixi.entropy)
-TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
-TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
-TVN_true = TV_norm_ensemble(data.xt)
-metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
-
+begin
+    mesh_weights_state = vec(sys_euler.mesh.md.wJq)
+    mesh_weights = repeat(mesh_weights_state, nvariables(equations))
+    calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
+    weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
+    weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
+    rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
+    rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
+    get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
+    get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
+    euler_entropy = u -> Trixi.entropy(u, equations)
+    euler_qoi_member = (u, fcn) -> mesh_weights_state' * fcn.(eachrow(reshape(u, :, nvariables(equations))), (equations,))
+    euler_qoi_ens = (u_ens, fcn) -> euler_qoi_member.(eachcol(u_ens), fcn)
+    mass_true, entropy_true = euler_qoi_ens(data.xt, Trixi.density), euler_qoi_ens(data.xt, Trixi.entropy)
+    TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
+    TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
+    TVN_true = TV_norm_ensemble(data.xt)
+    metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
+end
 
 # %%
 for alg_name in ["locenkf", "hlocenkf"]
@@ -438,12 +456,13 @@ end;
 # %%
 make_figs && with_theme(my_theme) do
     fig = Figure(size=(1010, 500))
-    tsnap = 50
-    idx = 10
+    tsnap = minimum(length.([X_hlocenkf, X_locenkf]) .- 1)
     ax1 = Axis(fig[1, 1])
     ax2 = Axis(fig[1, 2])
-    lines!(ax1, xgrid, data.xt[idxρ, tsnap], linewidth=3, label="Truth")
-    lines!(ax2, xgrid, data.xt[idxρ, tsnap], linewidth=3, label="Truth")
+    plot_idx = idxρ
+    plot_idx_y = idxρy
+    lines!(ax1, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
+    lines!(ax2, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
 
     # lines!(ax, xgrid, X[Ny+1:Ny+Nx,2])
     # lines!(ax, xgrid, X_enkf[tsnap+1][:,idx], linewidth = 3, label = "EnKF")
@@ -452,7 +471,6 @@ make_figs && with_theme(my_theme) do
     # lines!(ax, xgrid, X_locenkf[tsnap+1][:,1][idxρ,1], linewidth = 3, label = "LocEnKF")
     # lines!(ax, xgrid, mean(X_locenkf[tsnap+1]; dims = 2)[idxρ,1], linewidth = 3, label = "LocEnKF")
 
-
     # lines!(ax, xgrid, X_henkf[tsnap+1][:,2], linewidth = 3, label = "HEnKF")
     # lines!(ax, xgrid, X_henkf[tsnap+1][:,2])
     # lines!(ax, xgrid, mean(X_henkf[tsnap+1]; dims = 2)[:,1], linewidth = 3, label = "HEnKF")
@@ -460,25 +478,21 @@ make_figs && with_theme(my_theme) do
     cols = Makie.wong_colors()
     for j in 1:Ne
         col = cols[mod1(j, length(cols))]
-        # lines!(ax1, xgrid, X_locenkf[tsnap+1][:, j][idxρ, 1], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=(col, 0.2))
-        lines!(ax2, xgrid, X_hlocenkf[tsnap+1][:, j][idxρ, 1], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=(col, 0.2))
+        lines!(ax1, xgrid, X_locenkf[tsnap+1][plot_idx, j], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=(col, 0.2))
+        lines!(ax2, xgrid, X_hlocenkf[tsnap+1][plot_idx, j], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=(col, 0.2))
     end
     # lines!(ax, xgrid, mean(X_hlocenkf[tsnap+1]; dims = 2)[idxρ,1], linewidth = 3, label = "HLocEnKF")
-
     # ax2 = Axis(fig[1,2])
-
     # fig[1, 2] = Legend(fig, ax, "Filters", framevisible = false)
-
     # lines!(ax, xgrid[1:2:end], data.yt[idxpy,tsnap], linewidth = 3)
-
-
-    # scatter!(ax, xgrid[1:delta_y:end], data.yt[:,tsnap])
-    # lines!(ax, xs, PA.P*X_enkf[tsnap+1][:,2])
-
+    scatter!(ax1, xgrid[1:delta_y:end], data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
+    scatter!(ax2, xgrid[1:delta_y:end], data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
+    # lines!(ax2, xgrid[PA_offset:end-PA_offset+1], θ_hlocenkf[tsnap+1][3:3:end])
     axislegend(ax1)
     axislegend(ax2)
     fig
 end
+
 # %%
 make_figs && with_theme(my_theme) do
     cols = Makie.wong_colors()

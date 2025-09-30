@@ -20,16 +20,19 @@ data_path = joinpath(@__DIR__, "data")
 proj_path = joinpath(@__DIR__, "..")
 random_seed = rand(UInt)
 
+proj_path = joinpath(@__DIR__, "../..")
+make_figs = true
+
 # %%
 # Problem setup params
-polydeg = 7 # Order in space
+polydeg = 4 # Order in space
 Ncells = 100 # Number of DG cells
-delta_y = 80 # Spatial frequency of observation. Not regularly spaced
+delta_y = 25 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
 delta_t_obs = 0.025 # Amount of time between each observation
 
 sigma_x_data = 1e-3 # Noise in the state dynamics (i.e., the PDE solution itself)
-sigma_y = 0.15 # Noise in the state observation (i.e., what the "sensors" record)
+sigma_y = 0.05 # Noise in the state observation (i.e., what the "sensors" record)
 
 t0, tf = 0.0, 1.0 # Start and end time
 
@@ -149,31 +152,18 @@ make_figs && with_theme(my_theme) do
     fig
 end
 
-## Selecion of hyper-prior parameters
-# power parameter
-r_range = [1.0, 0.5, -0.5, -1.0];
-r_GSBL = r_range[hyperprior_idx] # select parameter 
-# shape parameter
-beta_range = [1.501, 3.0918, 2.0165, 1.0017];
-beta_GSBL = beta_range[hyperprior_idx] # shape parameter
-# rate parameters 
-ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
-ϑ_GSBL = ϑ_range[hyperprior_idx]
-
-dist = GeneralizedGamma(r_GSBL, beta_GSBL, ϑ_GSBL);
-
 # %%
 # Define function class for the initial condition
 f0 = SmoothPeriodic(xgrid, alpha_k_f0; L=L_f0);
-X = zeros(model.Ny + model.Nx, Ne)
+X = zeros(model.Nx, Ne)
 
 for i = 1:Ne
     regenerate!(f0)
-    X[Ny+1:Ny+Nx, i] = f0.(xgrid) / 3 .+ 0.5#initial_condition(alpha_k, Δx, Nx)
+    X[:, i] = f0.(xgrid) / 3 .+ 0.5#initial_condition(alpha_k, Δx, Nx)
 end
 
 # %%
-Cϵ = LinearMap(ϵy.σ)
+Cϵ = LinearMap(ϵy.σ, Ny)
 sys_y = ObsSystem(H, Cϵ);
 
 # %%
@@ -181,8 +171,9 @@ yidx = 1:delta_y:Nx
 idx = vcat(collect(1:length(yidx))', collect(yidx)')
 
 # Create Localization structure
-Gxx(i, j) = periodicmetric!(i, j, Nx)
-Loc = Localization(Nx, Lrad, Gxx, is_sparse=true)
+metric = PeriodicMetric(Nx)
+Loc = Localization(Nx, Lrad, metric, is_sparse=true)
+# beta_infl, sigma_x_filter = 1.04, 0.1
 ϵxbeta_filter = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
@@ -192,7 +183,7 @@ make_figs && with_theme(my_theme) do
     ax = Axis(fig[1, 1])
 
     for i = 1:10
-        lines!(ax, xgrid, X[Ny+1:Ny+Nx, i])
+        lines!(ax, xgrid, X[:, i])
     end
     # lines!(xgrid, mean(X[Ny+1:Ny+Nx, :]; dims=2)[:, 1], linewidth=5, linestyle=:dash)
 
@@ -209,43 +200,62 @@ locenkf = LocEnKF(Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 X_locenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
-PA_offset = ceil(Int64, order_PA / 2)
-Ns = Nx - 2 * PA_offset
+# Selection of hyper-prior parameters
+# power parameter
+r_range = [1.0, 0.5, -0.5, -1.0];
+r_GSBL = r_range[hyperprior_idx] # select parameter
+# shape parameter
+beta_range = [1.501, 3.0918, 2.0165, 1.0017];
+beta_GSBL = beta_range[hyperprior_idx] # shape parameter
+# rate parameters
+ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
+ϑ_GSBL = ϑ_range[hyperprior_idx]
 
-PA = PolyAnnil(xgrid, order_PA; istruncated=true)
-@assert size(PA.P) == (Ns, Nx)
+dist = GeneralizedGamma(r_GSBL, beta_GSBL, ϑ_GSBL);
+
+# %%
+PA_offset = ceil(Int64, order_PA / 2)
+# Ns = Nx - 2 * PA_offset
+
+PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=Tuple(sys_burgers.mesh.md.x[[1, end]]))
+# @assert size(PA.P) == (Ns, Nx)
 
 S = LinearMaps.WrappedMap(PA.P)
 
-theta_init_vec = fill(theta_init, Ns)
+theta_init_vec = fill(theta_init, size(PA.P, 1))
 Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ);
 
 # %%
+Niter, theta_init = 5, 1.
 hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
 
 # %%
 @info "Performing GSBL EnKF..."
+ϵxbeta_filter = MultiAddInflation(Nx, 1.02, zeros(Nx), 1e-2)
+# Loc = Localization(Nx, Lrad, metric, is_sparse=true)
 X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
-equations = sys_burgers.equations
-mesh_weights_state = vec(sys_burgers.mesh.md.wJq)
-mesh_weights = repeat(mesh_weights_state, nvariables(equations))
-calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
-weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
-weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
-rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
-rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
-get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
-get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
-advection_entropy = u -> Trixi.entropy(u, equations)
-TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
-TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
-TVN_true = TV_norm_ensemble(data.xt)
-mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, advection_entropy])
+begin
+    equations = sys_burgers.equations
+    mesh_weights_state = vec(sys_burgers.mesh.md.wJq)
+    mesh_weights = repeat(mesh_weights_state, nvariables(equations))
+    calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
+    weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
+    weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
+    rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
+    rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
+    get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
+    get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
+    advection_entropy = u -> Trixi.entropy(u, equations)
+    TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
+    TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
+    TVN_true = TV_norm_ensemble(data.xt)
+    mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, advection_entropy])
 
-metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
+    metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
+end
 
 # %%
 for alg_name in ["locenkf", "hlocenkf"]
@@ -314,6 +324,63 @@ end;
 
 # %%
 make_figs && with_theme(my_theme) do
+    tsnap = length(X_hlocenkf) ÷ 2
+    x_tsnap = data.xt[:, tsnap]
+    X_hlocenkf_tsnap = vec(mean(X_hlocenkf[tsnap+1]; dims=2))
+    X_ens_tsnap = [X_hlocenkf[tsnap+1][:, j] for j in 1:Ne]
+    theta_tsnap = θ_hlocenkf[tsnap+1]
+    theta_tsnap *= 0.1 / maximum(theta_tsnap)
+    y_tsnap = data.yt[:, tsnap]
+    cols = Makie.wong_colors()
+
+    fig = Figure()
+
+    ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
+
+    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
+    lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
+    lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
+    # lines!(ax1, xgrid, ys, linewidth=3, label="State")
+    scatter!(ax1, xgrid, theta_tsnap, label="θ", markersize=5)
+    for j in 1:Ne
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.4))
+    end
+    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
+
+    axislegend(ax1)
+
+    display(fig)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    tsnap = length(X_locenkf) - 1
+    x_tsnap = data.xt[:, tsnap]
+    X_locenkf_tsnap = vec(mean(X_locenkf[tsnap+1]; dims=2))
+    X_ens_tsnap = [X_locenkf[tsnap+1][:, j] for j in 1:Ne]
+    theta_tsnap = θ_hlocenkf[tsnap+1]
+    theta_tsnap *= 0.1 / maximum(theta_tsnap)
+    y_tsnap = data.yt[:, tsnap]
+    cols = Makie.wong_colors()
+
+    fig = Figure()
+
+    ax1 = Axis(fig[1, 1], title="Localized EnKF")
+
+    lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="LocEnKF")
+    lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
+    for j in 1:Ne
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.4))
+    end
+    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
+
+    axislegend(ax1)
+
+    display(fig)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
     t_start = 1
     tsnap = Observable(t_start)
     x_tsnap = @lift(data.xt[:, $tsnap])
@@ -332,15 +399,13 @@ make_figs && with_theme(my_theme) do
     # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
     lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
     lines!(ax1, xgrid, ys, linewidth=3, label="State")
-    lines!(ax1, xgrid[PA_offset+1:end-PA_offset], theta_tsnap, linewidth=3, label="θ")
+    lines!(ax1, xgrid, theta_tsnap, linewidth=3, label="θ")
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
     end
     scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
 
     axislegend(ax1)
-
-
     framerate = 10
     timestamps = range(t_start, Tf, step=1)
 
@@ -389,6 +454,8 @@ make_figs && with_theme(my_theme) do
     tsnap = Observable(t_start)
     x_tsnap = @lift(data.xt[:, $tsnap])
     y_tsnap = @lift(data.yt[:, $tsnap])
+    ut = t -> map(x -> x[], vec(data.xt[:, round(Int, t / delta_t_obs)]))
+    ys = @lift(ut(($tsnap) * delta_t_obs))
     X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
     X_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
     cols = Makie.wong_colors()
@@ -400,6 +467,7 @@ make_figs && with_theme(my_theme) do
     # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
     lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="LocEnKF")
     lines!(ax1, xgrid, ys, linewidth=3, label="State")
+
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
     end

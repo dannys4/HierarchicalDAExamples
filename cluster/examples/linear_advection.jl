@@ -20,6 +20,9 @@ data_path = joinpath(@__DIR__, "data")
 proj_path = joinpath(@__DIR__, "..")
 random_seed = rand(UInt)
 
+proj_path = joinpath(@__DIR__, "../..")
+make_figs = true
+
 # %%
 # PDE solution parameters
 polydeg = 3
@@ -30,10 +33,10 @@ coordinates_min, coordinates_max = -1., 1.
 
 # %%
 # Data generation setup
-delta_y = 50
+delta_y = 25
 delta_t_dyn = 0.05
 delta_t_obs = 0.25
-t0, tf = 0.0, 25.0
+t0, tf = 0.0, 10.0
 sigma_x_data = 1e-5
 sigma_y = 0.2
 
@@ -195,8 +198,9 @@ Nx = length(xgrid)
 yidx = 1:delta_y:Nx
 
 # Create Localization structure
-Gxx(i, j) = periodicmetric!(i, j, Nx)
-Loc = Localization(Nx, Lrad, Gxx, is_sparse=true)
+# Gxx(i, j) = periodicmetric!(i, j, Nx)
+metric = PeriodicMetric(Nx)
+Loc = Localization(Nx, Lrad, metric, is_sparse=true)
 ϵxβ_enkf = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
@@ -210,8 +214,8 @@ locenkf = LocEnKF(Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
 # %%
-# Selection of hyper-prior parameters
-# power parameter
+# Selection of hyper-prior parameters power parameter
+hyperprior_idx = 4
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
@@ -221,9 +225,12 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
+# r_GSBL, β_GSBL, ϑ_GSBL = 1., 30., 1e-3
+# ϑ_GSBL = 1e-3
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
+order_PA = 3
 PA_offset = ceil(Int, order_PA / 2)
 Ns = Nx - 2PA_offset
 PA = PolyAnnil(xgrid, order_PA; istruncated=true)
@@ -236,29 +243,31 @@ Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter=5, θinit=1.)
 
 # %%
 @info "Performing GSBL EnKF..."
 X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
 # %%
-mesh_weights_state = vec(sys_advection.mesh.md.wJq)
-mesh_weights = repeat(mesh_weights_state, nvariables(equations))
-calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
-weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
-weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
-rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
-rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
-get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
-get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
-advection_entropy = u -> Trixi.entropy(u, sys_advection.equations)
-TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
-TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
-TVN_true = TV_norm_ensemble(data.xt)
-mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, advection_entropy])
+begin
+    mesh_weights_state = vec(sys_advection.mesh.md.wJq)
+    mesh_weights = repeat(mesh_weights_state, nvariables(equations))
+    calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
+    weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
+    weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
+    rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
+    rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
+    get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
+    get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
+    advection_entropy = u -> Trixi.entropy(u, sys_advection.equations)
+    TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
+    TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
+    TVN_true = TV_norm_ensemble(data.xt)
+    mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, advection_entropy])
 
-metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
+    metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
+end
 
 # %%
 for alg_name in ["locenkf", "hlocenkf"]
@@ -324,6 +333,63 @@ jldopen(joinpath(data_path, "advection_" * string(now()) * ".jld2"), "w") do fil
         filter_group[string(X_alg)] = @eval($X_alg)
     end
 end;
+
+# %%
+make_figs && with_theme(my_theme) do
+    xt = data.xt[:, 9]
+    fig = Figure()
+    ax = Axis(fig[1, 1])
+    lines!(xgrid, xt, linewidth=3, label="True state")
+    sp = 10 * PA.P * xt
+    lines!(xgrid_S, sp, linewidth=3, label="PA application")
+    axislegend()
+    display(fig)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    tsnap = length(X_hlocenkf) - 1
+    #x_tsnap = @lift(data.xt[:, $tsnap])
+    #y_tsnap = @lift(data.yt[:, $tsnap])
+    #X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
+    #X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
+    #theta_tsnap = @lift(θhist[$tsnap+1])
+    x_tsnap = data.xt[:, tsnap]
+    X_hlocenkf_tsnap = vec(mean(X_hlocenkf[tsnap+1]; dims=2))
+    X_ens_tsnap = [X_hlocenkf[tsnap+1][:, j] for j in 1:Ne]
+    theta_tsnap = θhist[tsnap+1]
+    theta_tsnap *= 0.1 / maximum(theta_tsnap)
+    y_tsnap = data.yt[:, tsnap]
+    cols = Makie.wong_colors()
+
+    fig = Figure()
+
+    ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
+
+    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
+    lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
+    lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
+    # lines!(ax1, xgrid, ys, linewidth=3, label="State")
+    scatter!(ax1, xgrid[PA_offset+1:end-PA_offset], theta_tsnap, label="θ", markersize=5)
+    for j in 1:Ne
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.4))
+    end
+    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
+
+    axislegend(ax1)
+
+
+    # framerate = 10
+    # timestamps = range(t_start, Tf, step=1)
+
+    # anim = CairoMakie.Makie.Record(fig, timestamps; framerate=framerate) do t
+    #     tsnap[] = t
+    # end
+    # save(joinpath(@__DIR__, "figs", "assim_hlenkf.mp4"), anim)
+    # anim
+    display(fig)
+end
+
 
 # %%
 make_figs && with_theme(my_theme) do
