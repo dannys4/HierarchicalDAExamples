@@ -40,7 +40,7 @@ delta_t_obs = 0.04
 t0 = 0.0
 tf = 2.0
 
-delta_y = 100
+delta_y = 25
 density_thresh, pressure_thresh = 5e-6, 5e-6
 sigma_y = 0.1
 sigma_x_data = 0.0
@@ -50,7 +50,7 @@ sigma_x_data = 0.0
 
 # %%
 alpha_k_f0, L_f0 = 1.0, 10.0
-sigma_x_filter = 0.02
+sigma_x_filter = 0.05
 beta_infl = 1.02
 Lrad = 7
 Ne = 50
@@ -60,7 +60,7 @@ cfl = 0.9
 # ### GSBL parameters
 
 # %%
-order_PA = 3
+order_PA = 6
 hyperprior_idx = 4
 theta_init = 1.
 Niter = 5
@@ -118,25 +118,10 @@ equations = CompressibleEulerEquations1D(1.4)
 Nxvar = (polydeg + 1) * Ncells
 Nx = Nvar * Nxvar
 
-Nyvar = ceil(Int64, Nxvar / delta_y)
-Ny = Nvar * Nyvar
-
 # Define Trixi system for inviscid Burgers equation
 sys_euler = setup_euler(polydeg, Ncells);
 
 xgrid = GridFromMesh(sys_euler);
-
-# %%
-PA_skip = ceil(Int64, order_PA / 2)
-Nsvar = Nxvar - 2 * PA_skip
-Ns = Nvar * Nsvar
-
-PA = PolyAnnil(xgrid, order_PA; Nvar=Nvar, istruncated=true)
-
-@assert size(PA.P) == (Ns, Nx)
-
-S = LinearMaps.LinearMap(PA.P / Nvar)
-xs = xgrid[PA_skip+1:end-PA_skip];
 
 # %%
 idxρ = 3 * (0:(length(xgrid)-1)) .+ 1
@@ -147,10 +132,6 @@ idxρy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 1
 idxvy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 2
 idxpy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 3
 
-idxρs = idxρ[PA_skip+1:end-PA_skip]
-idxvs = idxv[PA_skip+1:end-PA_skip]
-idxps = idxp[PA_skip+1:end-PA_skip];
-
 # %%
 Tf = round(Int, (tf - t0) / delta_t_obs)
 π0 = MvNormal(zeros(Nx), Matrix(1.0 * I, Nx, Nx))
@@ -159,10 +140,13 @@ Tf = round(Int, (tf - t0) / delta_t_obs)
 ϵx_true = AdditiveInflation(Nx, zeros(Nx), sigma_x_data)
 ϵx_filter = AdditiveInflation(Nx, zeros(Nx), sigma_x_filter)
 
+# %%
+all_idxy = sort(reduce(vcat, Nvar * (0:delta_y:(length(xgrid)-1)) .+ i for i in 2:3))#1:3))
+
+Ny = length(all_idxy)
+
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y);
 
-# %%
-all_idxy = sort(reduce(vcat, Nvar * (0:delta_y:(length(xgrid)-1)) .+ i for i in 1:3))
 h(x, t) = x[all_idxy]
 H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[all_idxy, :]))
 F = StateSpace(x -> x, h)
@@ -250,29 +234,18 @@ make_figs && with_theme(my_theme) do
         idx_x, idx_y = idx_i
         axi = Axis(fig[1, i])
         lines!(axi, xgrid, data.xt[idx_x, 1], linewidth=3)
-        scatter!(axi, xgrid[1:delta_y:end], data.yt[idx_y, 1], markersize=18)
-        errorbars!(axi, xgrid[1:delta_y:end], data.yt[idx_y, 1], fill(2sigma_y, length(idx_y)))
         lines!(axi, xgrid, data.xt[idx_x, div(end, 3)], linewidth=3)
-        scatter!(axi, xgrid[1:delta_y:end], data.yt[idx_y, div(end, 3)], markersize=18)
-        errorbars!(axi, xgrid[1:delta_y:end], data.yt[idx_y, div(end, 3)], fill(2sigma_y, length(idx_y)))
+        if i in [2, 3]
+            i -= 1
+            scatter!(axi, xgrid[1:delta_y:end], data.yt[i:2:end, 1], markersize=18)
+            errorbars!(axi, xgrid[1:delta_y:end], data.yt[i:2:end, 1], fill(2sigma_y, length(idx_y)))
+            scatter!(axi, xgrid[1:delta_y:end], data.yt[i:2:end, div(end, 3)], markersize=18)
+            errorbars!(axi, xgrid[1:delta_y:end], data.yt[i:2:end, div(end, 3)], fill(2sigma_y, length(idx_y)))
+        end
     end
     save(joinpath(@__DIR__, "figs", "time_slices.pdf"), fig)
     display(fig)
 end;
-
-# %%
-# Selection of hyper-prior parameters
-# power parameter
-r_range = [1.0, 0.5, -0.5, -1.0];
-r_GSBL = r_range[hyperprior_idx] # select parameter
-# shape parameter
-β_range = [1.501, 3.0918, 2.0165, 1.0017];
-β_GSBL = β_range[hyperprior_idx] # shape parameter
-# rate parameters
-ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
-ϑ_GSBL = ϑ_range[hyperprior_idx]
-
-dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
 pos_vars = ["rho", "p"]
@@ -304,11 +277,6 @@ CX = LinearMap(collect(1. * I(Nx)))
 Cϵ = LinearMap(ϵy.Σ, size(H, 1))
 sys_y = ObsSystem(H, Cϵ)
 
-theta_init_vec = fill(theta_init, Ns)
-Cθ = LinearMap(Diagonal(theta_init_vec))
-sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
-
-# %%
 yidx = 1:delta_y:Nx
 idx = vcat(collect(1:length(yidx))', collect(yidx)')
 
@@ -345,10 +313,48 @@ catch e
 end
 
 # %%
-hlocenkf = HLocEnKF(filtering_fcn!, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter=20, θinit=theta_init, isfiltered=false)
+order_PA = 8
+PA_skip = ceil(Int64, order_PA / 2)
+Nsvar = Nxvar - 2 * PA_skip
+Ns = Nvar * Nsvar
+
+PA = PolyAnnil(xgrid, order_PA; Nvar=Nvar, istruncated=true)
+
+@assert size(PA.P) == (Ns, Nx)
+
+S = LinearMaps.LinearMap(PA.P / Nvar)
+xs = xgrid[PA_skip+1:end-PA_skip];
+
+idxρs = idxρ[PA_skip+1:end-PA_skip]
+idxvs = idxv[PA_skip+1:end-PA_skip]
+idxps = idxp[PA_skip+1:end-PA_skip];
 
 # %%
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 1, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
+# Selection of hyper-prior parameters
+# power parameter
+hyperprior_idx = 4
+r_range = [1.0, 0.5, -0.5, -1.0];
+r_GSBL = r_range[hyperprior_idx] # select parameter
+# shape parameter
+β_range = [1.501, 3.0918, 2.0165, 1.0017];
+β_GSBL = β_range[hyperprior_idx] # shape parameter
+# rate parameters
+ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
+ϑ_GSBL = ϑ_range[hyperprior_idx]
+
+dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
+
+# %%
+theta_init_vec = fill(theta_init, Ns)
+Cθ = LinearMap(Diagonal(theta_init_vec))
+sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
+
+# %%
+ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y);
+hlocenkf = HLocEnKF(filtering_fcn!, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isfiltered=false)
+
+# %%
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 10, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 
 # %%
 local X_hlocenkf, θ_hlocenkf
@@ -456,38 +462,26 @@ end;
 # %%
 make_figs && with_theme(my_theme) do
     fig = Figure(size=(1010, 500))
-    tsnap = minimum(length.([X_hlocenkf, X_locenkf]) .- 1)
+    tsnap = length(X_hlocenkf) - 1#minimum(length.([X_hlocenkf, X_locenkf]) .- 1)
     ax1 = Axis(fig[1, 1])
     ax2 = Axis(fig[1, 2])
-    plot_idx = idxρ
-    plot_idx_y = idxρy
+    plot_idx, plot_idx_y = idxv, idxvy
     lines!(ax1, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
     lines!(ax2, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
-
-    # lines!(ax, xgrid, X[Ny+1:Ny+Nx,2])
-    # lines!(ax, xgrid, X_enkf[tsnap+1][:,idx], linewidth = 3, label = "EnKF")
-    # lines!(ax, xgrid, mean(X_enkf[tsnap+1]; dims = 2)[:,1], linewidth = 3, label = "EnKF")
-
-    # lines!(ax, xgrid, X_locenkf[tsnap+1][:,1][idxρ,1], linewidth = 3, label = "LocEnKF")
-    # lines!(ax, xgrid, mean(X_locenkf[tsnap+1]; dims = 2)[idxρ,1], linewidth = 3, label = "LocEnKF")
-
-    # lines!(ax, xgrid, X_henkf[tsnap+1][:,2], linewidth = 3, label = "HEnKF")
-    # lines!(ax, xgrid, X_henkf[tsnap+1][:,2])
-    # lines!(ax, xgrid, mean(X_henkf[tsnap+1]; dims = 2)[:,1], linewidth = 3, label = "HEnKF")
 
     cols = Makie.wong_colors()
     for j in 1:Ne
         col = cols[mod1(j, length(cols))]
-        lines!(ax1, xgrid, X_locenkf[tsnap+1][plot_idx, j], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=(col, 0.2))
+        # lines!(ax1, xgrid, X_locenkf[tsnap+1][plot_idx, j], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=(col, 0.2))
         lines!(ax2, xgrid, X_hlocenkf[tsnap+1][plot_idx, j], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=(col, 0.2))
     end
     # lines!(ax, xgrid, mean(X_hlocenkf[tsnap+1]; dims = 2)[idxρ,1], linewidth = 3, label = "HLocEnKF")
     # ax2 = Axis(fig[1,2])
     # fig[1, 2] = Legend(fig, ax, "Filters", framevisible = false)
     # lines!(ax, xgrid[1:2:end], data.yt[idxpy,tsnap], linewidth = 3)
-    scatter!(ax1, xgrid[1:delta_y:end], data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
-    scatter!(ax2, xgrid[1:delta_y:end], data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
-    # lines!(ax2, xgrid[PA_offset:end-PA_offset+1], θ_hlocenkf[tsnap+1][3:3:end])
+    # scatter!(ax1, xgrid[1:delta_y:end], data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
+    # scatter!(ax2, xgrid[1:delta_y:end], data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
+    lines!(ax2, xs, θ_hlocenkf[tsnap+1][3:3:end])
     axislegend(ax1)
     axislegend(ax2)
     fig
