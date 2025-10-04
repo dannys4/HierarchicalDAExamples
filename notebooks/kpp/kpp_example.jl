@@ -22,7 +22,7 @@ Pkg.precompile()
 # %%
 using Revise
 using LinearAlgebra, Statistics, SparseArrays
-using FFTW, Distributions, JLD2
+using Distributions, JLD2
 using LinearMaps
 using CairoMakie, Trixi, OrdinaryDiffEq
 using HierarchicalDA, TransportBasedInference2

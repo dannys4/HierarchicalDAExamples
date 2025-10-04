@@ -46,7 +46,7 @@ alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 
 # %%
 # GSBL Hyperparams
-order_PA = 3 # Poly annihilator order
+order_PA = 8 # Poly annihilator order
 Niter = 5
 theta_init = 1.
 hyperprior_idx = 4
