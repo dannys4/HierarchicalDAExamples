@@ -16,17 +16,18 @@
 
 # %%
 make_figs = false
+verbose = false
 data_path = joinpath(@__DIR__, "data")
 proj_path = joinpath(@__DIR__, "..")
 random_seed = rand(UInt)
 
 proj_path = joinpath(@__DIR__, "../..")
-make_figs = true
+# make_figs = true
 
 # %%
 # Problem setup params
-polydeg = 4 # Order in space
-Ncells_dim = 8 # Number of DG cells
+polydeg = 2 # Order in space
+Ncells_dim = 32 # Number of DG cells
 delta_y = 25 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
 delta_t_obs = 0.025 # Amount of time between each observation
@@ -130,11 +131,12 @@ x0 = sol2vec(x0_sol, sys_kpp.equations)
 data = generate_data_trixi(model, x0, Tf, sys_kpp; ode_solver, cfl=0.9)
 
 # %%
-grid1d = unique(x -> round(x, digits=3), sys_kpp.mesh.md.xq)
+unique_digits = 5
+grid1d = unique(x -> round(x, digits=unique_digits), sys_kpp.mesh.md.xq)
 f0_row = SmoothPeriodic(grid1d, alpha_k_f0; L=L_f0, Nvar)
 f0_col = SmoothPeriodic(grid1d, alpha_k_f0; L=L_f0, Nvar)
 # Need prim vars ρ and p to be positive
-x0_ens = reduce(hcat, sample_initial_state2d(sys_kpp, f0_row, f0_col; Nvar) for _ in 1:Ne)
+x0_ens = reduce(hcat, sample_initial_state2d(sys_kpp, f0_row, f0_col; Nvar, unique_digits) for _ in 1:Ne)
 noise_level_t0 = 0.05
 for c_idx in CartesianIndices(x0_ens)
     (state_idx, ens_idx) = Tuple(c_idx)
@@ -159,7 +161,7 @@ locenkf = LocEnKF(identity, Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfil
 
 # %%
 store_state_path = joinpath(@__DIR__, "data")
-# X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; ode_solver, cfl=0.8, store_state_path);
+X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; ode_solver, cfl=0.8, store_state_path, verbose);
 
 # %%
 # Selection of hyper-prior parameters
@@ -190,38 +192,38 @@ sys_ys = ObsConstraintSystem(LinearMap(Matrix(H)), S, Cθ, Cϵ, CX_init; isitera
 hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter=2, θinit=theta_init, isiterative, isfiltered=false)
 
 # %%
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 2, filter_inflation, hlocenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; store_state_path, verbose=true)
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; store_state_path, verbose)
 
 # %%
-tspan = (0.0, 1.0)
-ode = semidiscretize(sys_kpp.semi, tspan)
+# tspan = (0.0, 1.0)
+# ode = semidiscretize(sys_kpp.semi, tspan)
 
-summary_callback = SummaryCallback()
-analysis_callback = AnalysisCallback(sys_kpp.semi, interval=100, uEltype=Float64)
-stepsize_callback = StepsizeCallback(; cfl=0.8)
-alive_callback = AliveCallback(analysis_interval=200)
-callbacks = CallbackSet(summary_callback,
-    analysis_callback, alive_callback,
-    stepsize_callback
-)
-sol_dgmulti = solve(ode, SSPRK43(); ode_default_options()..., callback=callbacks)
+# summary_callback = SummaryCallback()
+# analysis_callback = AnalysisCallback(sys_kpp.semi, interval=100, uEltype=Float64)
+# stepsize_callback = StepsizeCallback(; cfl=0.8)
+# alive_callback = AliveCallback(analysis_interval=200)
+# callbacks = CallbackSet(summary_callback,
+#     analysis_callback, alive_callback,
+#     stepsize_callback
+# )
+# sol_dgmulti = solve(ode, SSPRK43(); ode_default_options()..., callback=callbacks)
 
-##
-s_state = sol_dgmulti(1.0)
-# s_sp = PA.P * vec(s_state)
-# pd_sol = PlotData2D(reshape(s_sp, size(s_state)), sys_kpp.semi)
-pd_sol = PlotData2D(s_state, sys_kpp.semi)
-plot(pd_sol)
-
-##
-plot_data = SVector{1}.(reshape(@view(data.xt[:, 2]), (polydeg + 1)^2, Ncells_dim^2))
-pd_sol = PlotData2D(plot_data, sys_kpp.semi)
-plot(pd_sol)
+# ##
+# s_state = sol_dgmulti(1.0)
+# # s_sp = PA.P * vec(s_state)
+# # pd_sol = PlotData2D(reshape(s_sp, size(s_state)), sys_kpp.semi)
+# pd_sol = PlotData2D(s_state, sys_kpp.semi)
+# plot(pd_sol)
 
 ##
-plot_ens = SVector{1}.(reshape(@view(X_hlocenkf[1][:, 1]), (polydeg + 1)^2, Ncells_dim^2))
-pd_sol = PlotData2D(plot_ens, sys_kpp.semi)
-fig = plot(pd_sol)
+# plot_data = SVector{1}.(reshape(@view(data.xt[:, 2]), (polydeg + 1)^2, Ncells_dim^2))
+# pd_sol = PlotData2D(plot_data, sys_kpp.semi)
+# plot(pd_sol)
+
+##
+# plot_ens = SVector{1}.(reshape(@view(X_hlocenkf[1][:, 1]), (polydeg + 1)^2, Ncells_dim^2))
+# pd_sol = PlotData2D(plot_ens, sys_kpp.semi)
+# fig = plot(pd_sol)
 # x_coord = H * vec(sys_kpp.mesh.md.xq)
 # y_coord = H * vec(sys_kpp.mesh.md.yq)
 # scatter(x_coord, y_coord)
@@ -229,6 +231,6 @@ fig = plot(pd_sol)
 
 ##
 # PA_app = PA.P * data.xt[:, 2]
-out = zeros(size(PA.P, 2))
-mul!(@view(out[PA_nz_idx]), PA.P, @view(data.xt[:, 2]))
-heatmap(reshape(out, Ncells_dim * (polydeg + 1), :), axis=(aspect=1.,))
+# out = zeros(size(PA.P, 2))
+# mul!(@view(out[PA_nz_idx]), PA.P, @view(data.xt[:, 2]))
+# heatmap(reshape(out, Ncells_dim * (polydeg + 1), :), axis=(aspect=1.,))
