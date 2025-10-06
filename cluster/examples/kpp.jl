@@ -16,7 +16,7 @@
 
 # %%
 make_figs = false
-verbose = false
+verbose = true
 data_path = joinpath(@__DIR__, "data")
 proj_path = joinpath(@__DIR__, "..")
 random_seed = rand(UInt)
@@ -161,7 +161,7 @@ locenkf = LocEnKF(identity, Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfil
 
 # %%
 store_state_path = joinpath(@__DIR__, "data")
-X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; ode_solver, cfl=0.8, store_state_path, verbose);
+# X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; ode_solver, cfl=0.8, store_state_path, verbose);
 
 # %%
 # Selection of hyper-prior parameters
