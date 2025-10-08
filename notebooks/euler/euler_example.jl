@@ -146,7 +146,7 @@ ode_solver = SSPRK43(stage_limiter!)
 data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, cfl=0.2)
 
 # %%
-false && with_theme(my_theme) do
+make_figs && with_theme(my_theme) do
     fig = Figure()
     ax = Axis(fig[1, 1], title="Initial Condition", ylabel=L"u(0,x)", xlabel=L"x")
     xgrid = -5:0.01:5

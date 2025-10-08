@@ -175,7 +175,7 @@ ode_solver = SSPRK43(stage_limiter!)
 data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, cfl=0.2)
 
 # %%
-false && with_theme(my_theme) do
+make_figs && with_theme(my_theme) do
     quad_wts = vec(sys_euler.mesh.md.wJq)
     ents = zeros(size(data.xt, 2))
     for (t, x) in enumerate(eachcol(data.xt))
@@ -200,7 +200,7 @@ make_figs && with_theme(my_theme) do
 end;
 
 # %%
-false && with_theme(my_theme) do
+make_figs && with_theme(my_theme) do
     N_T = length(data.tt)
     p_t = t -> data.xt[idxps, t]
     ρ_t = t -> data.xt[idxρs, t]

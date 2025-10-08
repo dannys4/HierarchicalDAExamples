@@ -27,20 +27,20 @@ proj_path = joinpath(@__DIR__, "../..")
 # %%
 # Problem setup params
 polydeg = 2 # Order in space
-Ncells_dim = 32 # Number of DG cells
-delta_y = 25 # Spatial frequency of observation. Not regularly spaced
+Ncells_dim = 48 # Number of DG cells
+delta_y = 36 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
 delta_t_obs = 0.025 # Amount of time between each observation
 
 sigma_x_data = 0. # Noise in the state dynamics (i.e., the PDE solution itself)
 sigma_y = 0.01 # Noise in the state observation (i.e., what the "sensors" record)
 
-t0, tf = 0.0, 0.5 # Start and end time
+t0, tf = 0.0, 1.0 # Start and end time
 
 # %%
 # Important parameters for data assimilation
 Ne = 50 # Ensemble size
-Lrad = 10 # Localization radius
+Lrad = 4 # Localization radius
 sigma_x_filter = 0.02 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
@@ -48,7 +48,7 @@ alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 # %%
 # GSBL Hyperparams
 order_PA = 3 # Poly annihilator order
-Niter = 5
+Niter = 1
 theta_init = 1.
 hyperprior_idx = 4
 
@@ -104,8 +104,8 @@ Tf = ceil(Int, (tf - t0) / delta_t_obs)
 
 # %%
 Nvar = nvariables(sys_kpp.equations)
-H = create_observation_operator2d(
-    sys_kpp, polydeg + 1; offset=(polydeg + 1) ÷ 2, Nvar
+H, H_points = create_observation_operator2d(
+    sys_kpp, delta_y; offset=(polydeg + 1) ÷ 2, Nvar
 )
 Ny, Nx = size(H)
 Nx_var = Nx ÷ Nvar
@@ -152,16 +152,16 @@ ĈX = LocalizedEmpiricalCov(x0_ens, Loc; with_matrix=false)
 
 # %%
 CX_init = ĈX #LinearMaps.FunctionMap{Float64,true}(, Nx, issymmetric=true)
-sparse_pattern = Int.(filter(!iszero, H * (1:size(H, 2))))
+sparse_pattern = Int.(H * (1:size(H, 2)))
 sys_y = ObsSystem(H, Cϵ, CX_init; use_workspace=true, sparse_pattern);
 
 # %%
 filter_inflation = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
-locenkf = LocEnKF(identity, Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=true, isiterative=true);
+locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isiterative=true);
 
 # %%
 store_state_path = joinpath(@__DIR__, "data")
-# X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; ode_solver, cfl=0.8, store_state_path, verbose);
+X_locenkf = seqassim_trixi(data, 5, filter_inflation, locenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; ode_solver, cfl=0.8, verbose, store_state_path);
 
 # %%
 # Selection of hyper-prior parameters
@@ -179,20 +179,20 @@ dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
 # PA_offset = ceil(Int64, order_PA / 2)
-PA, PA_nz_idx = VerticalPolyAnnil2D(sys_kpp, order_PA; Nvar, istruncated=true, isperiodic=false, periodic_limits=(-2, 2))
+PA, PA_nz_idx = VerticalPolyAnnil2D(sys_kpp, order_PA; Nvar, istruncated=true, isperiodic=true, periodic_limits=(-2, 2))
 S = LinearMap(PA.P)
 Ns = size(PA.P, 1)
 theta_init_vec = fill(theta_init, Ns)
 Cθ = LinearMap(Diagonal(theta_init_vec))
 isiterative = true
-sys_ys = ObsConstraintSystem(LinearMap(Matrix(H)), S, Cθ, Cϵ, CX_init; isiterative)
+sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX_init; cache_matrix=false, isiterative)
 
 # %%
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y);
-hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter=2, θinit=theta_init, isiterative, isfiltered=false)
+hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter=1, θinit=theta_init, isiterative, isfiltered=false)
 
 # %%
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; store_state_path, verbose)
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 5, filter_inflation, hlocenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; store_state_path, verbose)
 
 # %%
 # tspan = (0.0, 1.0)
@@ -215,19 +215,34 @@ X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, c
 # pd_sol = PlotData2D(s_state, sys_kpp.semi)
 # plot(pd_sol)
 
-##
-# plot_data = SVector{1}.(reshape(@view(data.xt[:, 2]), (polydeg + 1)^2, Ncells_dim^2))
-# pd_sol = PlotData2D(plot_data, sys_kpp.semi)
-# plot(pd_sol)
+# %%
+plot_data = SVector{1}.(reshape(@view(data.xt[:, 6]), (polydeg + 1)^2, Ncells_dim^2))
+pd_sol = PlotData2D(plot_data, sys_kpp.semi)
+plot(pd_sol)
+
+# %%
+obs_end = reshape(data.yt[:, end], :, Int(sqrt(size(H_points, 2))))
+hx, hy = reshape.(eachrow(H_points), (:,), Int(sqrt(size(H_points, 2))))
+heatmap(hx[:, 1], hy[1, :], obs_end; axis=(; aspect=1.))
+
+# %%
+plot_ens = SVector{1}.(reshape(@view(X_locenkf[end][:, end]), (polydeg + 1)^2, Ncells_dim^2))
+pd_sol = PlotData2D(plot_ens, sys_kpp.semi)
+plot(pd_sol)
 
 ##
-# plot_ens = SVector{1}.(reshape(@view(X_hlocenkf[1][:, 1]), (polydeg + 1)^2, Ncells_dim^2))
-# pd_sol = PlotData2D(plot_ens, sys_kpp.semi)
-# fig = plot(pd_sol)
+plot_ens = SVector{1}.(reshape(@view(X_hlocenkf[:, 1]), (polydeg + 1)^2, Ncells_dim^2))
+pd_sol = PlotData2D(plot_ens, sys_kpp.semi)
+plot(pd_sol)
 # x_coord = H * vec(sys_kpp.mesh.md.xq)
 # y_coord = H * vec(sys_kpp.mesh.md.yq)
 # scatter(x_coord, y_coord)
 # fig
+
+# %%
+θ_plot = SVector{1}.(reshape(θ_hlocenkf[end], (polydeg + 1)^2, Ncells_dim^2))
+pd_θ = PlotData2D(θ_plot, sys_kpp.semi)
+plot(pd_θ)
 
 ##
 # PA_app = PA.P * data.xt[:, 2]
