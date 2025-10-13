@@ -26,14 +26,14 @@ proj_path = joinpath(@__DIR__, "../..")
 
 # %%
 # Problem setup params
-polydeg = 2 # Order in space
-Ncells_dim = 48 # Number of DG cells
-delta_y = 36 # Spatial frequency of observation. Not regularly spaced
+polydeg = 3 # Order in space
+Ncells_dim = 24 # Number of DG cells
+delta_y = 4 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
 delta_t_obs = 0.025 # Amount of time between each observation
 
 sigma_x_data = 0. # Noise in the state dynamics (i.e., the PDE solution itself)
-sigma_y = 0.01 # Noise in the state observation (i.e., what the "sensors" record)
+sigma_y = 0.1 # Noise in the state observation (i.e., what the "sensors" record)
 
 t0, tf = 0.0, 1.0 # Start and end time
 
@@ -48,7 +48,7 @@ alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 # %%
 # GSBL Hyperparams
 order_PA = 3 # Poly annihilator order
-Niter = 1
+Niter = 2
 theta_init = 1.
 hyperprior_idx = 4
 
@@ -137,10 +137,20 @@ f0_row = SmoothPeriodic(grid1d, alpha_k_f0; L=L_f0, Nvar)
 f0_col = SmoothPeriodic(grid1d, alpha_k_f0; L=L_f0, Nvar)
 # Need prim vars ρ and p to be positive
 x0_ens = reduce(hcat, sample_initial_state2d(sys_kpp, f0_row, f0_col; Nvar, unique_digits) for _ in 1:Ne)
-noise_level_t0 = 0.05
+aux_reps = 10
+x0_ens_aux = map(_ -> reduce(hcat, sample_initial_state2d(sys_kpp, f0_row, f0_col; Nvar, unique_digits) for _ in 1:Ne), 1:aux_reps)
+noise_level_t0 = 0.5
 for c_idx in CartesianIndices(x0_ens)
     (state_idx, ens_idx) = Tuple(c_idx)
-    x0_ens[c_idx] = muladd(noise_level_t0, x0_ens[c_idx], (1 - noise_level_t0) * x0[state_idx])
+    aux_noise = sum(x0a[c_idx] for x0a in x0_ens_aux)
+    x0_ens[c_idx] = muladd(noise_level_t0, (x0_ens[c_idx] + aux_noise), (1 - noise_level_t0) * x0[state_idx])
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    plot_ens = SVector{1}.(reshape(@view(x0_ens[:, 1]), (polydeg + 1)^2, Ncells_dim^2))
+    pd_sol = PlotData2D(plot_ens, sys_kpp.semi)
+    plot(pd_sol)
 end
 
 # %%
@@ -161,7 +171,7 @@ locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isiterative=true);
 
 # %%
 store_state_path = joinpath(@__DIR__, "data")
-X_locenkf = seqassim_trixi(data, 5, filter_inflation, locenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; ode_solver, cfl=0.8, verbose, store_state_path);
+X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; ode_solver, cfl=0.8, verbose, store_state_path);
 
 # %%
 # Selection of hyper-prior parameters
@@ -179,7 +189,7 @@ dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
 # PA_offset = ceil(Int64, order_PA / 2)
-PA, PA_nz_idx = VerticalPolyAnnil2D(sys_kpp, order_PA; Nvar, istruncated=true, isperiodic=true, periodic_limits=(-2, 2))
+PA, PA_nz_idx = PolyAnnil2D(sys_kpp, order_PA; Nvar, istruncated=true, isperiodic=true, periodic_limits=(-2, 2))
 S = LinearMap(PA.P)
 Ns = size(PA.P, 1)
 theta_init_vec = fill(theta_init, Ns)
@@ -189,10 +199,10 @@ sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX_init; cache_matrix=false, isiter
 
 # %%
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y);
-hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter=1, θinit=theta_init, isiterative, isfiltered=false)
+hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isiterative, isfiltered=false, cg_tol=1e-3)
 
 # %%
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 5, filter_inflation, hlocenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; store_state_path, verbose)
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; store_state_path, verbose)
 
 # %%
 # tspan = (0.0, 1.0)
@@ -215,34 +225,75 @@ X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 5, filter_inflation, hlocenkf, co
 # pd_sol = PlotData2D(s_state, sys_kpp.semi)
 # plot(pd_sol)
 
-# %%
-plot_data = SVector{1}.(reshape(@view(data.xt[:, 6]), (polydeg + 1)^2, Ncells_dim^2))
-pd_sol = PlotData2D(plot_data, sys_kpp.semi)
-plot(pd_sol)
+# %% Map KPP data to interpolation points
+make_figs && (TrixiMakie = Base.get_extension(Trixi, :TrixiMakieExt))
+
+function ensemble_to_itp(ensemble)
+    x_quad = Trixi.allocate_coefficients(Trixi.mesh_equations_solver_cache(sys_kpp.semi)...)
+    x_ens_itp = similar(x_quad, (size(x_quad)..., size(ensemble, 2)))
+    for t_idx in axes(ensemble, 2)
+        vec2sol!(x_quad, @view(ensemble[:, t_idx]), sys_kpp.equations)
+        HierarchicalDA.get_interp_node_vals!(sys_kpp.dg, x_quad, selectdim(x_ens_itp, ndims(x_ens_itp), t_idx))
+    end
+    x_ens_itp
+end
+itp_data = ensemble_to_itp(data.xt)
+itp_hlocenkf = ensemble_to_itp(X_hlocenkf[end])
+itp_locenkf = ensemble_to_itp(X_locenkf[end])
+θ_plot = ensemble_to_itp(reshape(θ_hlocenkf[end], :, 2))
 
 # %%
-obs_end = reshape(data.yt[:, end], :, Int(sqrt(size(H_points, 2))))
-hx, hy = reshape.(eachrow(H_points), (:,), Int(sqrt(size(H_points, 2))))
-heatmap(hx[:, 1], hy[1, :], obs_end; axis=(; aspect=1.))
+make_figs && with_theme(my_theme) do
+    pd_sols = map(slice -> PlotData2D(slice, sys_kpp.semi)["u"], eachslice(itp_data, dims=3))
+    fig = Figure(size=(600, 500))
+    ax = Axis(fig[1, 1], aspect=1., limits=(-2, 2, -2, 2))
+    colorrange = map(getindex, extrema(itp_data))
+    cb = Colorbar(fig[1, 2]; colorrange)
+
+    for timestamp in 1:Tf
+        plt_t = TrixiMakie.trixiheatmap!(ax, pd_sols[timestamp], plot_mesh=false; colorrange)
+        pic_fname = joinpath(@__DIR__, "figs", "kpp_sol", "t$(timestamp).png")
+        save(pic_fname, fig)
+        delete!(ax, plt_t)
+    end
+end
 
 # %%
-plot_ens = SVector{1}.(reshape(@view(X_locenkf[end][:, end]), (polydeg + 1)^2, Ncells_dim^2))
-pd_sol = PlotData2D(plot_ens, sys_kpp.semi)
-plot(pd_sol)
+# obs_end = reshape(data.yt[:, end], :, Int(sqrt(size(H_points, 2))))
+# hx, hy = reshape.(eachrow(H_points), (:,), Int(sqrt(size(H_points, 2))))
+# heatmap(hx[:, 1], hy[1, :], obs_end; axis=(; aspect=1.))
 
 ##
-plot_ens = SVector{1}.(reshape(@view(X_hlocenkf[:, 1]), (polydeg + 1)^2, Ncells_dim^2))
-pd_sol = PlotData2D(plot_ens, sys_kpp.semi)
-plot(pd_sol)
-# x_coord = H * vec(sys_kpp.mesh.md.xq)
-# y_coord = H * vec(sys_kpp.mesh.md.yq)
-# scatter(x_coord, y_coord)
-# fig
+make_figs && with_theme(my_theme) do
+    pd_sol = PlotData2D(itp_hlocenkf[:, :, 1], sys_kpp.semi)
+    plot(pd_sol)
+end
 
 # %%
-θ_plot = SVector{1}.(reshape(θ_hlocenkf[end], (polydeg + 1)^2, Ncells_dim^2))
-pd_θ = PlotData2D(θ_plot, sys_kpp.semi)
-plot(pd_θ)
+make_figs && with_theme(my_theme) do
+    pd_sol = PlotData2D(itp_locenkf[:, :, 6], sys_kpp.semi)
+    plot(pd_sol)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    mean_locenkf = mean(itp_hlocenkf, dims=3)[:, :]
+    # plot_ens = SVector{1}.(reshape(mean_locenkf, (polydeg + 1)^2, Ncells_dim^2))
+    pd_sol = PlotData2D(mean_locenkf, sys_kpp.semi)
+    plot(pd_sol)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    pd_θ_x = PlotData2D(θ_plot[:, :, 1], sys_kpp.semi)
+    plot(pd_θ_x)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    pd_θ_y = PlotData2D(θ_plot[:, :, 2], sys_kpp.semi)
+    plot(pd_θ_y)
+end
 
 ##
 # PA_app = PA.P * data.xt[:, 2]
