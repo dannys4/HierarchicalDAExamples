@@ -73,13 +73,13 @@ PA_offset = ceil(Int, order_PA / 2)
 xs = xgrid[PA_offset+1:end-PA_offset];
 
 # %%
-idxρ = 1:length(xgrid)
-idxv = length(xgrid) .+ collect(1:length(xgrid))
-idxp = 2 * length(xgrid) .+ collect(1:length(xgrid));
+idxρ = 3 * (0:(length(xgrid)-1)) .+ 1
+idxv = 3 * (0:(length(xgrid)-1)) .+ 2
+idxp = 3 * (0:(length(xgrid)-1)) .+ 3
 
-idxρy = 1:ceil(Int64, Nx / (Δy * Nvar))
-idxvy = ceil(Int64, Nx / (Δy * Nvar)) .+ collect(1:ceil(Int64, Nx / (Δy * Nvar)))
-idxpy = 2 * ceil(Int64, Nx / (Δy * Nvar)) .+ collect(1:ceil(Int64, Nx / (Δy * Nvar)))
+idxρy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 1
+idxvy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 2
+idxpy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 3
 
 idxρs = idxρ[ceil(Int64, order_PA / 2)+1:end-ceil(Int64, order_PA / 2)]
 idxvs = idxv[ceil(Int64, order_PA / 2)+1:end-ceil(Int64, order_PA / 2)]
@@ -107,10 +107,11 @@ tf = t0 + Tf * Δtobs
 ϵx_filter = AdditiveInflation(Nx, zeros(Nx), σx_filter)
 
 ϵy = AdditiveInflation(Ny, zeros(Ny), σy);
+all_idxy = sort(reduce(vcat, Nvar * (0:delta_y:(length(xgrid)-1)) .+ i for i in 1:3))
 
 # %%
-h(x, t) = x[unroll(1:Δy:length(xgrid), length(xgrid), Nvar)]
-H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[unroll(1:Δy:length(xgrid), length(xgrid), Nvar), :]))
+h(x, t) = x[all_idxy]
+H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[all_idxy, :]))
 F = StateSpace(x -> x, h)
 
 model = Model(Nx, Ny, Δtdyn, Δtobs, ϵx_true, ϵy, π0, 0, 0, 0, F);
