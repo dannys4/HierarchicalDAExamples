@@ -1,3 +1,6 @@
+using Pkg
+Pkg.activate(joinpath(@__DIR__, "../.."))
+
 using HierarchicalDA
 using JLD2
 using CairoMakie
@@ -49,10 +52,32 @@ X = nothing
 
 # %%
 itp_hlocenkf = ensemble_to_itp(X_hlocenkf, sys_kpp)
+itp_hlocenkf_θ = ensemble_to_itp(reshape(log10.(θ_hlocenkf), :, 2), sys_kpp)
 itp_locenkf = ensemble_to_itp(X_locenkf, sys_kpp)
 
 # %%
+
+# %%
+hh = Base.get_extension(HierarchicalDA, :HierarchicalDAMakieExt)
+
+# fig_means = plot_heatmaps(map(x -> mean(x, dims=3)[:, :], [itp_hlocenkf, itp_locenkf]), ["GSBL-DA, mean", "LocEnKF, mean"], sys_kpp)
+# save(joinpath(@__DIR__, "figs/kpp_means1.png"), fig_means)
+
+# %%
+fig_samples = plot_heatmaps(map(x -> x[:, :, 1], [itp_hlocenkf, itp_locenkf]), ["GSBL-DA sample", "LocEnKF sample"], sys_kpp)
+save(joinpath(@__DIR__, "figs/kpp_samples1.png"), fig_samples)
+
+
+# %%
+fig_theta = plot_heatmaps(eachslice(itp_hlocenkf_θ, dims=3), ["θ_x, log-scale", "θ_y, log-scale"], sys_kpp)
+save(joinpath(@__DIR__, "figs/kpp_theta1.png"), fig_theta)
+
+# %%
 pd_sol = PlotData2D(mean(itp_hlocenkf, dims=3)[:, :], sys_kpp.semi)
+plot(pd_sol)
+
+# %%
+pd_sol = PlotData2D(itp_hlocenkf_θ[:, :, 2], sys_kpp.semi)
 plot(pd_sol)
 
 # %%
