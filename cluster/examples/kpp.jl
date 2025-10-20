@@ -22,8 +22,13 @@ store_state_path = data_path
 proj_path = joinpath(@__DIR__, "..")
 random_seed = rand(UInt)
 
+<<<<<<< Updated upstream
 proj_path = joinpath(@__DIR__, "../..")
 make_figs = true
+=======
+# proj_path = joinpath(@__DIR__, "../..")
+# make_figs = true
+>>>>>>> Stashed changes
 
 # %%
 # Problem setup params
