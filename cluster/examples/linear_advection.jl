@@ -25,20 +25,19 @@ make_figs = true
 
 # %%
 # PDE solution parameters
-polydeg = 3
+polydeg = 2
 advection_velocity = 0.1
-
-Ncells = 100
+Ncells = 200
 coordinates_min, coordinates_max = -1., 1.
 
 # %%
 # Data generation setup
-delta_y = 25
+delta_y = 20
 delta_t_dyn = 0.05
 delta_t_obs = 0.25
 t0, tf = 0.0, 10.0
 sigma_x_data = 0.
-sigma_y = 5e-2
+sigma_y = 0.05
 
 # %% [markdown]
 # ### Parameters for Filtering
@@ -47,7 +46,7 @@ sigma_y = 5e-2
 # Important parameters for data assimilation
 Ne = 50 # Ensemble size
 Lrad = 7 # Localization radius
-sigma_x_filter = 0.15 # State noise
+sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0 = 0.8 # Parameter for initial condition
 
@@ -56,7 +55,7 @@ alpha_k_f0 = 0.8 # Parameter for initial condition
 
 # %%
 order_PA = 3
-hyperprior_idx = 4
+hyperprior_idx = 3
 theta_init = 1.
 Niter = 5
 
@@ -80,7 +79,6 @@ isdefined(Main, :IJulia) || for arg in ARGS
     end
     @eval($sym_key = $val_T)
 end
-
 
 # %%
 using Pkg
@@ -113,15 +111,22 @@ Random.seed!(random_seed);
 
 # %%
 # Set up functions for the PDE, initial condition and entropy setup
-function initial_condition_sawtooth_fcn(x, t;
-    a=-1, b=1, N_saw=4, u_a=0.0, u_b=0.95)
-    normalized_x = (x[] - a) / (b - a)
-    which_seg = normalized_x * N_saw
+function sawtooth_fcn(x, t, α;
+    a=-1, b=1, N_saw=4, u_a=0.0, u_b=1.0)
+    time_norm_x = x[] - α[] * t[]
+    norm_x = (time_norm_x - a) / (b - a)
+    unit_x = norm_x - floor(norm_x)
+    which_seg = unit_x * N_saw
     per_x = (which_seg - floor(which_seg))
     u_a + per_x * (u_b - u_a)
 end
-function initial_condition_sawtooth(x, t, _::LinearScalarAdvectionEquation1D)
-    SVector(initial_condition_sawtooth_fcn(x, t))
+
+function true_solution_advection_sawtooth!(α, u, x, t)
+    push!(Main._a, (u, x, t))
+    u .= sawtooth_fcn.(x, t, α)
+end
+function initial_condition_sawtooth(x, t, E::LinearScalarAdvectionEquation1D)
+    SVector(sawtooth_fcn(x, t, E.advection_velocity))
 end
 function Trixi.entropy2cons(t, ::LinearScalarAdvectionEquation1D)
     t
@@ -130,6 +135,7 @@ end
 # %%
 # Set up the PDE
 equations = LinearScalarAdvectionEquation1D(advection_velocity)
+soln! = (args...) -> true_solution_advection_sawtooth!(advection_velocity, args...)
 volume_flux = flux_central
 surface_flux = flux_lax_friedrichs
 basis = DGMultiBasis(Trixi.Line(), polydeg, approximation_type=GaussSBP())
@@ -169,9 +175,9 @@ sys_advection = TrixiSystem(equations, solver, mesh, semi)
 model = Model(Nx, Ny, delta_t_dyn, delta_t_obs, ϵx_data, ϵy, π0, 0, 0, 0, F)
 
 # %%
-u0 = initial_condition_sawtooth_fcn.(xgrid, (0,))
+u0 = sawtooth_fcn.(xgrid, (0,), (advection_velocity,))
 @info "Generating data..."
-data = generate_data_trixi(model, u0, Tf, sys_advection)
+data = generate_data_trixi(model, u0, Tf, sys_advection; (true_soln!)=soln!)
 
 # %%
 make_figs && with_theme(my_theme) do
@@ -207,7 +213,7 @@ Loc = Localization(Nx, Lrad, metric, is_sparse=true)
 Cϵ = LinearMap(ϵy.Σ, Ny)
 # This CX is replaced with the estimated state cov at each step
 sys_y = ObsSystem(H, Cϵ)
-locenkf = LocEnKF(Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
+locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 
 # %%
 @info "Performing EnKF..."
@@ -215,7 +221,6 @@ X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny
 
 # %%
 # Selection of hyper-prior parameters power parameter
-hyperprior_idx = 4
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
@@ -230,12 +235,9 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
-order_PA = 3
-# PA_offset = ceil(Int, order_PA / 2)
-# Ns = Nx - 2PA_offset
 PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(coordinates_min, coordinates_max))
 S = LinearMaps.LinearMap(PA.P)
-xgrid_S = xgrid #xgrid[PA_offset+1:end-PA_offset];
+xgrid_S = xgrid
 
 # %%
 theta_init_vec = fill(theta_init, length(xgrid_S))

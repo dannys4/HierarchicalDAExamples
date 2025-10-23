@@ -17,8 +17,7 @@
 # %%
 make_figs = false
 verbose = true
-data_path = joinpath(@__DIR__, "data")
-store_state_path = data_path
+data_root = joinpath(@__DIR__, "data")
 proj_path = joinpath(@__DIR__, "..")
 random_seed = rand(UInt)
 
@@ -28,30 +27,32 @@ make_figs = true
 # %%
 # Problem setup params
 polydeg = 3 # Order in space
-Ncells_dim = 24 # Number of DG cells
-delta_y = 6 # Spatial frequency of observation. Not regularly spaced
+Ncells_dim = 48 # Number of DG cells
+delta_y = 8 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
 delta_t_obs = 0.025 # Amount of time between each observation
 
 sigma_x_data = 0. # Noise in the state dynamics (i.e., the PDE solution itself)
-sigma_y = 0.1 # Noise in the state observation (i.e., what the "sensors" record)
+sigma_y = 1.0 # Noise in the state observation (i.e., what the "sensors" record)
 
-t0, tf = 0.0, 1.0 # Start and end time
+t0, tf = 0.0, 0.75 # Start and end time
 
 # %%
 # Important parameters for data assimilation
 Ne = 50 # Ensemble size
+Nx_dim = Ncells_dim * (polydeg + 1)
 Lrad = polydeg + 1 # Localization radius
-sigma_x_filter = 0.02 # State noise
+sigma_x_filter = 0.25 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
+cg_tol = 1e-2
 
 # %%
 # GSBL Hyperparams
 order_PA = 2 # Poly annihilator order
 Niter = 2
 theta_init = 1.
-hyperprior_idx = 1
+hyperprior_idx = 2
 
 # %%
 # Assign any given arguments
@@ -130,6 +131,10 @@ x0 = sol2vec(x0_sol, sys_kpp.equations)
 
 # %%
 data = generate_data_trixi(model, x0, Tf, sys_kpp; ode_solver, cfl=0.9)
+sim_id = Int(rand(UInt32))
+data_path = mkdir(joinpath(data_root, "sim$(string(sim_id))"))
+@save joinpath(data_path, "data.jld2") data polydeg Ncells_dim
+store_state_path = data_path
 
 # %%
 unique_digits = 5
@@ -168,10 +173,11 @@ sys_y = ObsSystem(H, Cϵ, CX_init; use_workspace=true, sparse_pattern);
 
 # %%
 filter_inflation = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
-locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isiterative=true);
+isiterative = true
+locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs; isiterative, cg_tol)
 
 # %%
-X_locenkf = seqassim_trixi(data, 3, filter_inflation, locenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; ode_solver, cfl=0.8, verbose=false, store_state_path);
+X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; ode_solver, cfl=0.8, verbose=false, store_state_path);
 
 # %%
 # Selection of hyper-prior parameters
@@ -182,9 +188,14 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
 β_range = [1.001 + Ne / 2, 2.5918 + Ne / 2, 2.0165, 1.0017];
 β_GSBL = β_range[hyperprior_idx] # shape parameter
+
+unadj_means = [β_range[1], β_range[2] * (β_range[2] + 1), 1 / ((β_range[3] - 2) * (β_range[3] - 1)), 1 / (β_range[4] - 1)]
+target_mean = 0.0724
+
 # rate parameters
-ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
+ϑ_range = target_mean ./ unadj_means;
 ϑ_GSBL = ϑ_range[hyperprior_idx]
+# ϑ_GSBL = 1e-1
 
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
@@ -195,15 +206,14 @@ S = LinearMap(PA.P)
 Ns = size(PA.P, 1)
 theta_init_vec = fill(theta_init, Ns)
 Cθ = LinearMap(Diagonal(theta_init_vec))
-isiterative = true
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX_init; cache_matrix=false, isiterative)
 
 # %%
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y);
-hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isiterative, isfiltered=false, cg_tol=1e-3)
+hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isiterative, isfiltered=false, cg_tol=1e-2)
 
 # %%
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 1, filter_inflation, hlocenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; store_state_path, verbose)
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(x0_ens), model.Ny, model.Nx, t0, sys_kpp; store_state_path, verbose)
 
 # %%
 # tspan = (0.0, 1.0)
@@ -251,8 +261,6 @@ end
 @info "" rmse_hlocenkf[] rmse_locenkf[]
 
 # %% Map KPP data to interpolation points
-make_figs && (TrixiMakie = Base.get_extension(Trixi, :TrixiMakieExt))
-
 itp_data = ensemble_to_itp(data.xt, sys_kpp)
 itp_locenkf = ensemble_to_itp(X_locenkf[end], sys_kpp)
 itp_hlocenkf = ensemble_to_itp(X_hlocenkf[end], sys_kpp)
