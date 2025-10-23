@@ -46,7 +46,7 @@ alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 
 # %%
 # GSBL Hyperparams
-order_PA = 8 # Poly annihilator order
+order_PA = 4 # Poly annihilator order
 Niter = 5
 theta_init = 1.
 hyperprior_idx = 4
@@ -104,7 +104,6 @@ Tf = round(Int, tf / delta_t_obs)
 
 # Define Trixi system for inviscid Burgers equation
 sys_burgers = setup_burgers(polydeg, Ncells);
-
 xgrid = vec(sys_burgers.mesh.md.xq);
 
 # %%
@@ -193,7 +192,7 @@ make_figs && with_theme(my_theme) do
 end
 
 # %%
-locenkf = LocEnKF(Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
+locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 
 # %%
 @info "Performing EnKF..."
@@ -233,7 +232,6 @@ hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, del
 # %%
 @info "Performing GSBL EnKF..."
 ϵxbeta_filter = MultiAddInflation(Nx, 1.02, zeros(Nx), 1e-3)
-# Loc = Localization(Nx, Lrad, metric, is_sparse=true)
 X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
@@ -413,7 +411,7 @@ make_figs && with_theme(my_theme) do
         tsnap[] = t
     end
     save(joinpath(@__DIR__, "figs", "assim_hlenkf.mp4"), anim)
-    anim
+    display(anim)
 end
 
 # %%
@@ -444,8 +442,7 @@ make_figs && with_theme(my_theme) do
     h3 = heatmap!(ax3, data.tt, xgrid, mean_hist(X_hlocenkf)[:, 2:end]')
 
     save(joinpath(@__DIR__, "figs", "heatmap_inviscid_burgers.png"), fig)
-
-    fig
+    display(fig)
 end;
 
 # %%
@@ -463,8 +460,6 @@ make_figs && with_theme(my_theme) do
     fig = Figure()
 
     ax1 = Axis(fig[1, 1], title="Localized EnKF")
-
-    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
     lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="LocEnKF")
     lines!(ax1, xgrid, ys, linewidth=3, label="State")
 
@@ -472,10 +467,7 @@ make_figs && with_theme(my_theme) do
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
     end
     scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
-
     axislegend(ax1)
-
-
     framerate = 10
     timestamps = range(t_start, Tf, step=1)
 
@@ -483,6 +475,5 @@ make_figs && with_theme(my_theme) do
         tsnap[] = t
     end
     save(joinpath(@__DIR__, "figs", "assim_lenkf.mp4"), anim)
-    anim
+    display(anim)
 end
-
