@@ -47,9 +47,9 @@ alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 # %%
 # GSBL Hyperparams
 order_PA = 4 # Poly annihilator order
-Niter = 5
+Niter = 2
 theta_init = 1.
-hyperprior_idx = 4
+hyperprior_idx = 2
 
 # %%
 # Assign any given arguments
@@ -178,16 +178,11 @@ Loc = Localization(Nx, Lrad, metric, is_sparse=true)
 # %%
 make_figs && with_theme(my_theme) do
     fig = Figure()
-
     ax = Axis(fig[1, 1])
-
     for i = 1:10
         lines!(ax, xgrid, X[:, i])
     end
-    # lines!(xgrid, mean(X[Ny+1:Ny+Nx, :]; dims=2)[:, 1], linewidth=5, linestyle=:dash)
-
     lines!(ax, xgrid, x0, linewidth=10)
-
     fig
 end
 
@@ -204,7 +199,7 @@ X_locenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, locenkf, deepcopy(X), model
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
-beta_range = [1.501, 3.0918, 2.0165, 1.0017];
+beta_range = [1.001 + Ne / 2, 2.5918 + Ne / 2, 2.0165, 1.0017];
 beta_GSBL = beta_range[hyperprior_idx] # shape parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
@@ -213,9 +208,8 @@ beta_GSBL = beta_range[hyperprior_idx] # shape parameter
 dist = GeneralizedGamma(r_GSBL, beta_GSBL, ϑ_GSBL);
 
 # %%
-PA_offset = ceil(Int64, order_PA / 2)
+# PA_offset = ceil(Int64, order_PA / 2)
 # Ns = Nx - 2 * PA_offset
-
 PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=Tuple(sys_burgers.mesh.md.x[[1, end]]))
 # @assert size(PA.P) == (Ns, Nx)
 
@@ -226,12 +220,12 @@ Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ);
 
 # %%
-Niter, theta_init = 5, 1.
+# Niter, theta_init = 5, 1.
 hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
 
 # %%
 @info "Performing GSBL EnKF..."
-ϵxbeta_filter = MultiAddInflation(Nx, 1.02, zeros(Nx), 1e-3)
+# ϵxbeta_filter = MultiAddInflation(Nx, 1.02, zeros(Nx), 1e-3)
 X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
@@ -410,7 +404,7 @@ make_figs && with_theme(my_theme) do
     anim = Makie.Record(fig, timestamps; framerate=framerate) do t
         tsnap[] = t
     end
-    save(joinpath(@__DIR__, "figs", "assim_hlenkf.mp4"), anim)
+    save(joinpath(@__DIR__, "figs", "burgers", "assim_hlenkf.mp4"), anim)
     display(anim)
 end
 
@@ -441,7 +435,7 @@ make_figs && with_theme(my_theme) do
         ylabel=L"x",)
     h3 = heatmap!(ax3, data.tt, xgrid, mean_hist(X_hlocenkf)[:, 2:end]')
 
-    save(joinpath(@__DIR__, "figs", "heatmap_inviscid_burgers.png"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "heatmap_inviscid_burgers.png"), fig)
     display(fig)
 end;
 
@@ -474,6 +468,6 @@ make_figs && with_theme(my_theme) do
     anim = Makie.Record(fig, timestamps; framerate=framerate) do t
         tsnap[] = t
     end
-    save(joinpath(@__DIR__, "figs", "assim_lenkf.mp4"), anim)
+    save(joinpath(@__DIR__, "figs", "burgers", "assim_lenkf.mp4"), anim)
     display(anim)
 end

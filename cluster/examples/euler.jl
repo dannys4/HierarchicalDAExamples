@@ -31,7 +31,7 @@ make_figs = true
 
 # %%
 polydeg = 3
-Ncells = 100
+Ncells = 50
 Nvar = 3
 
 delta_t_dyn = 0.02
@@ -52,7 +52,7 @@ sigma_x_data = 0.0
 alpha_k_f0, L_f0 = 1.0, 10.0
 sigma_x_filter = 0.05
 beta_infl = 1.02
-Lrad = 7
+Lrad = polydeg + 1
 Ne = 50
 cfl = 0.9
 
@@ -60,7 +60,7 @@ cfl = 0.9
 # ### GSBL parameters
 
 # %%
-order_PA = 6
+order_PA = 3
 hyperprior_idx = 4
 theta_init = 1.
 Niter = 5
@@ -121,16 +121,21 @@ Nx = Nvar * Nxvar
 # Define Trixi system for inviscid Burgers equation
 sys_euler = setup_euler(polydeg, Ncells);
 
-xgrid = GridFromMesh(sys_euler);
+xgrid = GridFromMesh(sys_euler)
+ygrid = xgrid[1:delta_y:end]
 
 # %%
-idxρ = 3 * (0:(length(xgrid)-1)) .+ 1
-idxv = 3 * (0:(length(xgrid)-1)) .+ 2
-idxp = 3 * (0:(length(xgrid)-1)) .+ 3
+idxρ = 3 * ((1:length(xgrid)) .- 1) .+ 1
+idxv = 3 * ((1:length(xgrid)) .- 1) .+ 2
+idxp = 3 * ((1:length(xgrid)) .- 1) .+ 3
 
-idxρy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 1
-idxvy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 2
-idxpy = 3 * (0:ceil(Int, Nx / (delta_y * Nvar))-1) .+ 3
+idxρy_xgrid = idxρ[1:delta_y:end]
+idxvy_xgrid = idxv[1:delta_y:end]
+idxpy_xgrid = idxp[1:delta_y:end]
+
+idxρy_ygrid = 3 * ((1:length(ygrid)) .- 1) .+ 1
+idxvy_ygrid = 3 * ((1:length(ygrid)) .- 1) .+ 2
+idxpy_ygrid = 3 * ((1:length(ygrid)) .- 1) .+ 3
 
 # %%
 Tf = round(Int, (tf - t0) / delta_t_obs)
@@ -141,14 +146,14 @@ Tf = round(Int, (tf - t0) / delta_t_obs)
 ϵx_filter = AdditiveInflation(Nx, zeros(Nx), sigma_x_filter)
 
 # %%
-all_idxy = sort(reduce(vcat, Nvar * (0:delta_y:(length(xgrid)-1)) .+ i for i in 2:3))#1:3))
+all_idxy = sort(vcat(idxρy_xgrid, idxvy_xgrid, idxpy_xgrid))
 
 Ny = length(all_idxy)
 
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y);
 
 h(x, t) = x[all_idxy]
-H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[all_idxy, :]))
+H = SelectionMap(all_idxy, :out, in_size=Nx) # LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[all_idxy, :]))
 F = StateSpace(x -> x, h)
 
 model = Model(Nx, Ny, delta_t_dyn, delta_t_obs, ϵx_true, ϵy, π0, 0, 0, 0, F);
@@ -179,8 +184,8 @@ make_figs && with_theme(my_theme) do
     quad_wts = vec(sys_euler.mesh.md.wJq)
     ents = zeros(size(data.xt, 2))
     for (t, x) in enumerate(eachcol(data.xt))
-        u_state = reshape(x, :, 3)
-        ents[t] = quad_wts'map(u -> Trixi.entropy(vec(u), sys_euler.equations), eachrow(u_state))
+        u_state = reshape(x, 3, :)
+        ents[t] = quad_wts' * map(u -> Trixi.entropy(vec(u), sys_euler.equations), eachcol(u_state))
     end
     display(lines(data.tt, ents, axis=(; title="Entropy of Shu-Osher shock", xlabel=L"t", ylabel=L"e")))
 end
@@ -195,16 +200,19 @@ make_figs && with_theme(my_theme) do
     lines!(xgrid, u0[2, :], label=L"\rho v_1")
     lines!(xgrid, u0[3, :], label=L"\rho e")
     axislegend()
-    save(joinpath(@__DIR__, "figs", "initial_condition.pdf"))
+    save(joinpath(@__DIR__, "figs", "euler", "initial_condition.pdf"))
     display(fig)
 end;
 
 # %%
+x_plot, data_plot = get_plot_ensemble(data.xt, sys_euler)
+
+# %%
 make_figs && with_theme(my_theme) do
     N_T = length(data.tt)
-    p_t = t -> data.xt[idxps, t]
-    ρ_t = t -> data.xt[idxρs, t]
-    v_t = t -> data.xt[idxvs, t]
+    p_t = t -> data_plot[:, 1, t]
+    ρ_t = t -> data_plot[:, 2, t]
+    v_t = t -> data_plot[:, 3, t]
 
     time = Observable(1)
     ps = @lift(p_t($time))
@@ -214,36 +222,34 @@ make_figs && with_theme(my_theme) do
     fig = Figure()
     title_times = round.(data.tt, digits=2)
     ax = Axis(fig[1, 1], xlabel=L"x", ylabel=L"u(t,x)", title=@lift("Shu-Osher, t = $(title_times[$time])"))
-    lines!(xs, ρs, label=L"\rho", linewidth=3)
-    lines!(xs, ps, label=L"p", linewidth=3)
-    lines!(xs, vs, label=L"v", linewidth=3)
+    lines!(x_plot, ρs, label=L"\rho", linewidth=3)
+    lines!(x_plot, ps, label=L"p", linewidth=3)
+    lines!(x_plot, vs, label=L"v", linewidth=3)
     axislegend()
-    # hlines!(vec(mesh_x), fill(0.05, length(mesh_x)))
     timestamps = 1:N_T
     anim = CairoMakie.Makie.Record(fig, timestamps; framerate=N_T ÷ 4) do t
         time[] = t
     end
-    save(joinpath(@__DIR__, "figs", "solution.mp4"), anim)
+    save(joinpath(@__DIR__, "figs", "euler", "solution.mp4"), anim)
     display(anim)
 end;
 
 # %%
 make_figs && with_theme(my_theme) do
     fig = Figure(size=(2100, 700))
-    for (i, idx_i) in enumerate([(idxρ, idxρy), (idxv, idxvy), (idxp, idxpy)])
-        idx_x, idx_y = idx_i
+    for (i, idx_y) in enumerate([idxρy_ygrid, idxvy_ygrid, idxpy_ygrid])
         axi = Axis(fig[1, i])
-        lines!(axi, xgrid, data.xt[idx_x, 1], linewidth=3)
-        lines!(axi, xgrid, data.xt[idx_x, div(end, 3)], linewidth=3)
+        lines!(axi, x_plot, data_plot[:, i, 1], linewidth=3)
+        lines!(axi, x_plot, data_plot[:, i, div(end, 3)], linewidth=3)
         if i in [2, 3]
             i -= 1
-            scatter!(axi, xgrid[1:delta_y:end], data.yt[i:2:end, 1], markersize=18)
-            errorbars!(axi, xgrid[1:delta_y:end], data.yt[i:2:end, 1], fill(2sigma_y, length(idx_y)))
-            scatter!(axi, xgrid[1:delta_y:end], data.yt[i:2:end, div(end, 3)], markersize=18)
-            errorbars!(axi, xgrid[1:delta_y:end], data.yt[i:2:end, div(end, 3)], fill(2sigma_y, length(idx_y)))
+            scatter!(axi, ygrid, data.yt[idx_y, 1], markersize=18)
+            errorbars!(axi, ygrid, data.yt[idx_y, 1], fill(2sigma_y, length(idx_y)))
+            scatter!(axi, ygrid, data.yt[idx_y, div(end, 3)], markersize=18)
+            errorbars!(axi, ygrid, data.yt[idx_y, div(end, 3)], fill(2sigma_y, length(idx_y)))
         end
     end
-    save(joinpath(@__DIR__, "figs", "time_slices.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "euler", "time_slices.pdf"), fig)
     display(fig)
 end;
 
@@ -257,18 +263,18 @@ X0 = positivity_preserving_noise1d(f0, initial_condition_shu_osher, Ne, sys_eule
 
 # %%
 make_figs && with_theme(my_theme) do
+    _, X0_plot = get_plot_ensemble(X0, sys_euler)
     fig = Figure(size=(2100, 700))
     axs = [Axis(fig[1, i], aspect=1., title=Trixi.varnames(cons2prim, equations)[i]) for i in 1:Nvar]
     num_ens_viz = 10
     for ens_idx in 1:num_ens_viz
-        X_sample = @view X0[:, ens_idx]
-        for (i, idx_i) in enumerate([(idxρ, idxρy), (idxv, idxvy), (idxp, idxpy)])
-            idx_x, idx_y = idx_i
-            lines!(axs[i], xgrid, X_sample[idx_x], linewidth=3)
+        X_sample = @view X0_plot[:, :, ens_idx]
+        for (var_idx, idx_y) in enumerate([idxρy, idxvy, idxpy])
+            lines!(axs[var_idx], x_plot, X_sample[:, var_idx], linewidth=3)
             # lines!(axi, xgrid, X_sample[idx_x, div(end, 3)], linewidth=3)
         end
     end
-    save(joinpath(@__DIR__, "figs", "initial_ensemble.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "euler", "initial_ensemble.pdf"), fig)
     display(fig)
 end;
 
@@ -277,11 +283,8 @@ CX = LinearMap(collect(1. * I(Nx)))
 Cϵ = LinearMap(ϵy.Σ, size(H, 1))
 sys_y = ObsSystem(H, Cϵ)
 
-yidx = 1:delta_y:Nx
-idx = vcat(collect(1:length(yidx))', collect(yidx)')
-
 # Create Localization structure
-metric = (i, j) -> cartesianmetric((i - 1) ÷ Nvar + 1, (j - 1) ÷ Nvar + 1)
+metric = CartesianMetric(; Nvar)
 Loc = Localization(Nx, Lrad, metric, is_sparse=true, is_herm=false)
 
 filter_inflation = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
@@ -296,10 +299,10 @@ function filtering_fcn!(x)
 end
 
 # %%
-locenkf = LocEnKF(filtering_fcn!, Ne, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=true)
+locenkf = LocEnKF(identity, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=false)
 
 # %%
-# X_locenkf = seqassim_trixi(data, 2, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl=0.2)
+X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl=0.2)
 
 # %%
 local X_locenkf
@@ -313,7 +316,6 @@ catch e
 end
 
 # %%
-order_PA = 8
 PA_skip = ceil(Int64, order_PA / 2)
 Nsvar = Nxvar - 2 * PA_skip
 Ns = Nvar * Nsvar
@@ -322,21 +324,25 @@ PA = PolyAnnil(xgrid, order_PA; Nvar=Nvar, istruncated=true)
 
 @assert size(PA.P) == (Ns, Nx)
 
-S = LinearMaps.LinearMap(PA.P / Nvar)
-xs = xgrid[PA_skip+1:end-PA_skip];
+S = LinearMaps.LinearMap(PA.P)
+θgrid = xgrid[PA_skip+1:end-PA_skip];
 
-idxρs = idxρ[PA_skip+1:end-PA_skip]
-idxvs = idxv[PA_skip+1:end-PA_skip]
-idxps = idxp[PA_skip+1:end-PA_skip];
+idxρθ_xgrid = 3 * ((PA_skip+1:length(xgrid)-PA_skip) .- 1) .+ 1
+idxvθ_xgrid = 3 * ((PA_skip+1:length(xgrid)-PA_skip) .- 1) .+ 2
+idxpθ_xgrid = 3 * ((PA_skip+1:length(xgrid)-PA_skip) .- 1) .+ 3
+
+idxρθ_θgrid = 3 * ((1:length(θgrid)) .- 1) .+ 1
+idxvθ_θgrid = 3 * ((1:length(θgrid)) .- 1) .+ 2
+idxpθ_θgrid = 3 * ((1:length(θgrid)) .- 1) .+ 3
 
 # %%
 # Selection of hyper-prior parameters
 # power parameter
-hyperprior_idx = 4
+hyperprior_idx = 1
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
-β_range = [1.501, 3.0918, 2.0165, 1.0017];
+β_range = [1.001 + Ne / 2, 2.5918 + Ne / 2, 2.0165, 1.0017];
 β_GSBL = β_range[hyperprior_idx] # shape parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
@@ -347,14 +353,27 @@ dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 # %%
 theta_init_vec = fill(theta_init, Ns)
 Cθ = LinearMap(Diagonal(theta_init_vec))
-sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
+isiterative = false
+sys_ys = nothing
+if isiterative
+    CX_init = LocalizedEmpiricalCov(X0, Loc; with_matrix=false)
+    sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX_init; cache_matrix=false, isiterative=true)
+else
+    sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
+end
 
 # %%
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y);
-hlocenkf = HLocEnKF(filtering_fcn!, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isfiltered=false)
+hlocenkf = nothing
+Niter = 2
+if isiterative
+    hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isiterative=true, isfiltered=false, cg_tol=1e-3)
+else
+    hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isfiltered=false)
+end
 
 # %%
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 10, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 
 # %%
 local X_hlocenkf, θ_hlocenkf
@@ -460,30 +479,36 @@ jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do fil
 end;
 
 # %%
+postproc_locenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_locenkf)
+postproc_hlocenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_hlocenkf)
+
+# %%
 make_figs && with_theme(my_theme) do
-    fig = Figure(size=(1010, 500))
     tsnap = length(X_hlocenkf) - 1#minimum(length.([X_hlocenkf, X_locenkf]) .- 1)
-    ax1 = Axis(fig[1, 1])
-    ax2 = Axis(fig[1, 2])
-    plot_idx, plot_idx_y = idxv, idxvy
+    all_idxs = Dict(
+        :ρ => (1, idxρ, idxρy_ygrid, idxρθ_θgrid),
+        :v => (2, idxv, idxvy_ygrid, idxvθ_θgrid),
+        :p => (3, idxp, idxpy_ygrid, idxpθ_θgrid),
+    )
+    which_var = "v"
+    fig = Figure(size=(1010, 500))
+    ax1 = Axis(fig[1, 1], title="EnKF $(which_var)")
+    ax2 = Axis(fig[1, 2], title="GSBL-EnKF $(which_var)")
+    var_idx, plot_idx, plot_idx_y, plot_idx_θ = all_idxs[Symbol(which_var)]
     lines!(ax1, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
     lines!(ax2, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
 
     cols = Makie.wong_colors()
     for j in 1:Ne
         col = cols[mod1(j, length(cols))]
-        # lines!(ax1, xgrid, X_locenkf[tsnap+1][plot_idx, j], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=(col, 0.2))
-        lines!(ax2, xgrid, X_hlocenkf[tsnap+1][plot_idx, j], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=(col, 0.2))
+        lines!(ax1, x_plot, postproc_locenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=(col, 0.2))
+        lines!(ax2, x_plot, postproc_hlocenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=(col, 0.2))
     end
-    # lines!(ax, xgrid, mean(X_hlocenkf[tsnap+1]; dims = 2)[idxρ,1], linewidth = 3, label = "HLocEnKF")
-    # ax2 = Axis(fig[1,2])
-    # fig[1, 2] = Legend(fig, ax, "Filters", framevisible = false)
-    # lines!(ax, xgrid[1:2:end], data.yt[idxpy,tsnap], linewidth = 3)
-    # scatter!(ax1, xgrid[1:delta_y:end], data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
-    # scatter!(ax2, xgrid[1:delta_y:end], data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
-    lines!(ax2, xs, θ_hlocenkf[tsnap+1][3:3:end])
-    axislegend(ax1)
-    axislegend(ax2)
+    scatter!(ax1, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
+    scatter!(ax2, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
+    scatter!(ax2, θgrid, θ_hlocenkf[tsnap+1][plot_idx_θ], label="θ")
+    axislegend(ax1, position=:lc)
+    axislegend(ax2, position=:lc)
     fig
 end
 
@@ -491,44 +516,44 @@ end
 make_figs && with_theme(my_theme) do
     cols = Makie.wong_colors()
     N_T = length(data.tt)
-    p_t = t -> data.xt[idxps, t]
-    ρ_t = t -> data.xt[idxρs, t]
-    v_t = t -> data.xt[idxvs, t]
-    J_Ens = 5
-    locenkf_p_t = t -> X_locenkf[t+1][:, J_Ens][idxps]
-    locenkf_ρ_t = t -> X_locenkf[t+1][:, J_Ens][idxρs]
-    locenkf_v_t = t -> X_locenkf[t+1][:, J_Ens][idxvs]
+    ρ_t = t -> data_plot[:, 1, t]
+    v_t = t -> data_plot[:, 2, t]
+    p_t = t -> data_plot[:, 3, t]
+    Nens_plot = Ne
+    locenkf_ρ_t = (t, ens_member) -> @view postproc_locenkf[t+1][:, 1, ens_member]
+    locenkf_v_t = (t, ens_member) -> @view postproc_locenkf[t+1][:, 2, ens_member]
+    locenkf_p_t = (t, ens_member) -> @view postproc_locenkf[t+1][:, 3, ens_member]
     # Offset each to account for previous offsets in data
 
     time = Observable(1)
     ps = @lift(p_t($time))
     ρs = @lift(ρ_t($time))
     vs = @lift(v_t($time))
-    locenkf_ps = @lift(locenkf_p_t($time))
-    locenkf_ρs = @lift(locenkf_ρ_t($time))
-    locenkf_vs = @lift(locenkf_v_t($time))
-    xs_theta = xs[1+PA_offset:end-PA_offset]
+    locenkf_ps = [@lift(locenkf_p_t($time, j)) for j in 1:Nens_plot]
+    locenkf_ρs = [@lift(locenkf_ρ_t($time, j)) for j in 1:Nens_plot]
+    locenkf_vs = [@lift(locenkf_v_t($time, j)) for j in 1:Nens_plot]
 
     px_size = 600
     fig = Figure(size=(3px_size, px_size))
-    ax_p = Axis(fig[1, 1], xlabel=L"x", title=L"p", aspect=1.)
-    ax_ρ = Axis(fig[1, 2], xlabel=L"x", title=L"\rho", aspect=1.)
-    ax_v = Axis(fig[1, 3], xlabel=L"x", title=L"v", aspect=1.)
-    lines!(ax_p, xs, ps, linewidth=3, label=L"p", color=cols[1], linestyle=:dash)
-    lines!(ax_p, xs, locenkf_ps, linewidth=3, label="LEnKF", color=cols[1])
-    axislegend(ax_p, position=:rt)
-    lines!(ax_ρ, xs, ρs, linewidth=3, label=L"\rho", color=cols[2], linestyle=:dash)
-    lines!(ax_ρ, xs, locenkf_ρs, linewidth=3, label="LEnKF", color=cols[2])
-    axislegend(ax_ρ, position=:rt)
-    lines!(ax_v, xs, vs, linewidth=3, label=L"v", color=cols[3], linestyle=:dash)
-    lines!(ax_v, xs, locenkf_vs, linewidth=3, label="LEnKF", color=cols[3])
-    axislegend(ax_v, position=:rt)
+    ax_ρ = Axis(fig[1, 1], xlabel=L"x", title=L"\rho", aspect=1.)
+    ax_v = Axis(fig[1, 2], xlabel=L"x", title=L"v", aspect=1.)
+    ax_p = Axis(fig[1, 3], xlabel=L"x", title=L"p", aspect=1.)
+    for (j, vv) in enumerate([("ρ", ρs, locenkf_ρs), ("v", vs, locenkf_vs), ("p", ps, locenkf_ps),])
+        which_var, truth, locenkf = vv
+        ax = Axis(fig[1, j], xlabel=L"x", title=which_var, aspect=1.)
+        lines!(ax, x_plot, truth, linewidth=3, label="truth", color=cols[1])
+        lines!(ax, x_plot, locenkf[1], linewidth=0.8, label="EnKF")
+        for ens_idx in 2:Nens_plot
+            lines!(ax, x_plot, locenkf[ens_idx], linewidth=0.4)
+        end
+        axislegend(ax, position=:rt)
+    end
 
     timestamps = 1:N_T
     anim = CairoMakie.Makie.Record(fig, timestamps; framerate=N_T ÷ 4) do t
         time[] = t
     end
-    save("figs/loc_enkf_result.mp4", anim)
+    save(joinpath(@__DIR__, "figs", "euler", "loc_enkf_result.mp4"), anim)
     anim
 end
 
@@ -536,54 +561,50 @@ end
 make_figs && with_theme(my_theme) do
     cols = Makie.wong_colors()
     N_T = length(data.tt)
-    p_t = t -> data.xt[idxps, t]
-    ρ_t = t -> data.xt[idxρs, t]
-    v_t = t -> data.xt[idxvs, t]
-    J_Ens = 5
-    hlocenkf_p_t = t -> X_hlocenkf[t][:, J_Ens][idxps]
-    hlocenkf_ρ_t = t -> X_hlocenkf[t][:, J_Ens][idxρs]
-    hlocenkf_v_t = t -> X_hlocenkf[t][:, J_Ens][idxvs]
+    ρ_t = t -> data_plot[:, 1, t]
+    v_t = t -> data_plot[:, 2, t]
+    p_t = t -> data_plot[:, 3, t]
+    Nens_plot = Ne
+    hlocenkf_ρ_t = (t, ens_member) -> @view postproc_hlocenkf[t+1][:, 1, ens_member]
+    hlocenkf_v_t = (t, ens_member) -> @view postproc_hlocenkf[t+1][:, 2, ens_member]
+    hlocenkf_p_t = (t, ens_member) -> @view postproc_hlocenkf[t+1][:, 3, ens_member]
+    hlocenkf_θ_ρ_t = t -> @view θ_hlocenkf[t+1][idxρθ_θgrid]
+    hlocenkf_θ_v_t = t -> @view θ_hlocenkf[t+1][idxvθ_θgrid]
+    hlocenkf_θ_p_t = t -> @view θ_hlocenkf[t+1][idxpθ_θgrid]
     # Offset each to account for previous offsets in data
-    θ_ρ_t = t -> (θ_hlocenkf[t][idxρs[PA_offset+1:end-PA_offset].-0PA_offset])
-    θ_v_t = t -> (θ_hlocenkf[t][idxvs[PA_offset+1:end-PA_offset].-2PA_offset])
-    θ_p_t = t -> (θ_hlocenkf[t][idxps[PA_offset+1:end-PA_offset].-4PA_offset])
 
-    time = Observable(2)
-    ps = @lift(p_t($time - 1))
-    ρs = @lift(ρ_t($time - 1))
-    vs = @lift(v_t($time - 1))
-    θ_ps = @lift(θ_p_t($time) / norm(θ_p_t($time)))
-    θ_ρs = @lift(θ_ρ_t($time) / norm(θ_ρ_t($time)))
-    θ_vs = @lift(θ_v_t($time) / norm(θ_v_t($time)))
-    hlocenkf_ps = @lift(hlocenkf_p_t($time))
-    hlocenkf_ρs = @lift(hlocenkf_ρ_t($time))
-    hlocenkf_vs = @lift(hlocenkf_v_t($time))
-    xs_theta = xs[1+PA_offset:end-PA_offset]
+    time = Observable(1)
+    ps = @lift(p_t($time))
+    ρs = @lift(ρ_t($time))
+    vs = @lift(v_t($time))
+    hlocenkf_ps = [@lift(hlocenkf_p_t($time, j)) for j in 1:Nens_plot]
+    hlocenkf_ρs = [@lift(hlocenkf_ρ_t($time, j)) for j in 1:Nens_plot]
+    hlocenkf_vs = [@lift(hlocenkf_v_t($time, j)) for j in 1:Nens_plot]
+    hlocenkf_θ_ps = @lift(hlocenkf_θ_p_t($time))
+    hlocenkf_θ_ρs = @lift(hlocenkf_θ_ρ_t($time))
+    hlocenkf_θ_vs = @lift(hlocenkf_θ_v_t($time))
 
     px_size = 600
     fig = Figure(size=(3px_size, px_size))
-    ax_p = Axis(fig[1, 1], xlabel=L"x", title=L"p", aspect=1.)
-    ax_ρ = Axis(fig[1, 2], xlabel=L"x", title=L"\rho", aspect=1.)
-    ax_v = Axis(fig[1, 3], xlabel=L"x", title=L"v", aspect=1.)
-    scatter!(ax_p, xs_theta, θ_ps, label=L"\theta_p", color=cols[1])
-    lines!(ax_p, xs, ps, linewidth=3, label=L"p", color=cols[1], linestyle=:dash)
-    lines!(ax_p, xs, hlocenkf_ps, linewidth=3, label="GSBL", color=cols[1])
-    axislegend(ax_p, position=:rt)
-    scatter!(ax_ρ, xs_theta, θ_ρs, label=L"\theta_\rho", color=cols[2])
-    lines!(ax_ρ, xs, ρs, linewidth=3, label=L"\rho", color=cols[2], linestyle=:dash)
-    lines!(ax_ρ, xs, hlocenkf_ρs, linewidth=3, label="GSBL", color=cols[2])
-    axislegend(ax_ρ, position=:rt)
-    scatter!(ax_v, xs_theta, θ_vs, label=L"\theta_v", color=cols[3])
-    lines!(ax_v, xs, vs, linewidth=3, label=L"v", color=cols[3], linestyle=:dash)
-    lines!(ax_v, xs, hlocenkf_vs, linewidth=3, label="GSBL", color=cols[3])
-    axislegend(ax_v, position=:rt)
+    ax_ρ = Axis(fig[1, 1], xlabel=L"x", title=L"\rho", aspect=1.)
+    ax_v = Axis(fig[1, 2], xlabel=L"x", title=L"v", aspect=1.)
+    ax_p = Axis(fig[1, 3], xlabel=L"x", title=L"p", aspect=1.)
+    for (j, vv) in enumerate([("ρ", ρs, hlocenkf_ρs, hlocenkf_θ_ρs), ("v", vs, hlocenkf_vs, hlocenkf_θ_vs), ("p", ps, hlocenkf_ps, hlocenkf_θ_ps),])
+        which_var, truth, hlocenkf, hlocenkf_θ_var = vv
+        ax = Axis(fig[1, j], xlabel=L"x", title=which_var, aspect=1.)
+        lines!(ax, x_plot, truth, linewidth=3, label="truth", color=cols[1])
+        lines!(ax, x_plot, hlocenkf[1], linewidth=0.8, label="GSBL-EnKF")
+        for ens_idx in 2:Nens_plot
+            lines!(ax, x_plot, hlocenkf[ens_idx], linewidth=0.4)
+        end
+        scatter!(ax, θgrid, hlocenkf_θ_var, label="θ_$which_var")
+        axislegend(ax, position=:rt)
+    end
 
-    timestamps = 2:N_T
+    timestamps = 1:N_T
     anim = CairoMakie.Makie.Record(fig, timestamps; framerate=N_T ÷ 4) do t
         time[] = t
     end
-    save("figs/hloc_enkf_result.mp4", anim)
+    save(joinpath(@__DIR__, "figs", "euler", "loc_henkf_result.mp4"), anim)
     anim
 end
-
-# %%

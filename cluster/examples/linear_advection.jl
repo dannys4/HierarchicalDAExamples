@@ -57,7 +57,7 @@ alpha_k_f0 = 0.8 # Parameter for initial condition
 order_PA = 3
 hyperprior_idx = 3
 theta_init = 1.
-Niter = 5
+Niter = 2
 
 # %%
 # Assign any given arguments
@@ -122,7 +122,6 @@ function sawtooth_fcn(x, t, α;
 end
 
 function true_solution_advection_sawtooth!(α, u, x, t)
-    push!(Main._a, (u, x, t))
     u .= sawtooth_fcn.(x, t, α)
 end
 function initial_condition_sawtooth(x, t, E::LinearScalarAdvectionEquation1D)
@@ -224,7 +223,7 @@ X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
-β_range = [1.501, 3.0918, 2.0165, 1.0017];
+β_range = [1.001 + Ne / 2, 2.5918 + Ne / 2, 2.0165, 1.0017];
 β_GSBL = β_range[hyperprior_idx] # shape parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
@@ -245,7 +244,7 @@ Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter=5, θinit=1.)
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
 
 # %%
 @info "Performing GSBL EnKF..."
