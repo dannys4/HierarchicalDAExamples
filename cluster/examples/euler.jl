@@ -600,3 +600,34 @@ make_figs && with_theme(my_theme) do
     save(joinpath(@__DIR__, "figs", "euler", "loc_henkf_result.mp4"), anim)
     anim
 end
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure(size=(1050, 500))
+    entropy_locenkf = reduce(hcat, metrics_locenkf[:entropy])'
+    entropy_hlocenkf = reduce(hcat, metrics_hlocenkf[:entropy])'
+    ylims = extrema(reduce(hcat, collect(extrema(x)) for x in [entropy_locenkf, entropy_hlocenkf]))
+    ax1 = Axis(fig[1, 1],
+        title="Euler Entropy, EnKF",
+        aspect=1.,
+        xlabel=L"t",
+        ylabel="Entropy",
+        limits=(t0, tf, ylims...)
+    )
+    ax2 = Axis(fig[1, 2],
+        title="Euler Entropy, GSBL-EnKF",
+        aspect=1.,
+        xlabel=L"t",
+        limits=(t0, tf, ylims...)
+    )
+    lines!(ax1, data.tt, entropy_data, linewidth=3, label="Entropy of solution")
+    lines!(ax2, data.tt, entropy_data, linewidth=3, label="Entropy of solution")
+    for ens_idx in 1:Ne
+        lines!(ax1, data.tt, entropy_locenkf[2:end, ens_idx], linewidth=0.5)
+        lines!(ax2, data.tt, entropy_hlocenkf[2:end, ens_idx], linewidth=0.5)
+    end
+    axislegend(ax1)
+    axislegend(ax2)
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "euler", "entropy.pdf"), fig)
+end
