@@ -114,7 +114,6 @@ Random.seed!(random_seed);
 
 # %%
 equations = CompressibleEulerEquations1D(1.4)
-
 Nxvar = (polydeg + 1) * Ncells
 Nx = Nvar * Nxvar
 
@@ -147,15 +146,11 @@ Tf = round(Int, (tf - t0) / delta_t_obs)
 
 # %%
 all_idxy = sort(vcat(idxρy_xgrid, idxvy_xgrid, idxpy_xgrid))
-
 Ny = length(all_idxy)
-
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y);
-
 h(x, t) = x[all_idxy]
 H = SelectionMap(all_idxy, :out, in_size=Nx) # LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[all_idxy, :]))
 F = StateSpace(x -> x, h)
-
 model = Model(Nx, Ny, delta_t_dyn, delta_t_obs, ϵx_true, ϵy, π0, 0, 0, 0, F);
 
 # Define function class for the initial condition
@@ -382,30 +377,33 @@ end
 
 # %%
 begin
-    prim2prim = (x, _) -> identity(x)
-    get_traj_quad_pts = traj -> map(x -> get_filter_quad_pts(x, sys_euler), traj)
-    data_quad = get_filter_quad_pts(data.xt, sys_euler)
-    hlocenkf_quad = get_traj_quad_pts(X_hlocenkf)
-    locenkf_quad = get_traj_quad_pts(X_locenkf)
-    mesh_wts = sys_euler.mesh.md.wJq
-    calc_moments = (ensemble, fcn) -> [weight_sum_reduction(fcn, sample, mesh_wts) for sample in eachslice(ensemble, dims=(1, ndims(ensemble)))]
+    get_traj_quad_pts = traj -> map(x -> reshape(get_filter_quad_pts(x, sys_euler), Nvar, :, Ne), traj)
+    data_quad = reshape(get_filter_quad_pts(data.xt, sys_euler), Nvar, :, Tf)
+    # hlocenkf_quad = get_traj_quad_pts(X_hlocenkf)
+    # locenkf_quad = get_traj_quad_pts(X_locenkf)
+    mesh_wts = vec(sys_euler.mesh.md.wJq)
+    # calc_moments = (ensemble, fcn) -> [weight_sum_reduction(fcn, sample, mesh_wts) for sample in eachslice(ensemble, dims=(1, ndims(ensemble)))]
     # calc_dists = (ensemble, fcn) -> [dist_weight_sum_reduction(fcn, sample, data_quad, mesh_wts) for sample in eachslice(ensemble, dims=(1, ndims(ensemble)))]
-    rel_norms1 = calc_moments(data.xt, abs)  #map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
-    rel_norms2 = calc_moments(data.xt, abs2) #map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
-    function get_errs(X, metric)
-        for j in axes(data_quad, 2)
-
-        end
+    rel_norms1 = sum(j -> mesh_wts[j] * abs.(data_quad[:, j, :]), eachindex(mesh_wts))
+    rel_norms2 = sqrt.(sum(j -> mesh_wts[j] * abs2.(data_quad[:, j, :]), eachindex(mesh_wts)))
+    # rel_norms1 = calc_moments(data.xt, abs)  #map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
+    # rel_norms2 = calc_moments(data.xt, abs2) #map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
+    get_errs = (X, metric, which_var) -> map(axes(data.xt, 2)) do t_idx
+        CRPS(X[t_idx+1][which_var, :, :], @view(data_quad[which_var, :, t_idx]), metric, mesh_wts)
     end
-    get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
-    get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
-    euler_entropy = u -> Trixi.entropy(prim2cons(u), equations)
-    euler_qoi_member = (u, fcn) -> mesh_weights_state' * fcn.(eachrow(reshape(u, :, nvariables(equations))), (equations,))
-    euler_qoi_ens = (u_ens, fcn) -> euler_qoi_member.(eachcol(u_ens), fcn)
-    mass_true, entropy_true = euler_qoi_ens(data.xt, Trixi.density), euler_qoi_ens(data.xt, Trixi.entropy)
-    TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
-    TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
-    TVN_true = TV_norm_ensemble(data.xt)
+    get_Lp = (err, rel_norms, prop::Symbol) -> mean(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
+    euler_density = u -> Trixi.density(prim2cons(u, equations), equations)
+    mass_ensemble = u_ens -> map(euler_density, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
+
+    euler_entropy = u -> Trixi.entropy(prim2cons(u, equations), equations)
+    entropy_ensemble = u_ens -> map(euler_entropy, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
+
+    TV_norm_state = u -> sum(abs, diff(u))
+    TV_norm_ensemble = u_ens -> map(TV_norm_state, eachslice(u_ens, dims=(1, 3)))
+
+    mass_data = mass_ensemble(data_quad)
+    entropy_data = entropy_ensemble(data_quad)
+    TV_data = TV_norm_ensemble(data_quad)
     metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
 end
 
@@ -416,22 +414,23 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict = @eval($metric_sym)
     X_sym = Symbol("X_$alg_name")
     eval(Expr(:isdefined, X_sym)) || continue
-    X_traj = @eval($X_sym)
+    X_traj = get_traj_quad_pts(@eval($X_sym))
     isnothing(X_traj) && continue
     for which_norm in [1, 2]
         norm = Symbol("norm$which_norm")
-        errs = get_errs(X_traj, norm)
+        errs = [get_errs(X_traj, norm, j) for j in 1:Nvar]
         rel_norms_sym = Symbol("rel_norms$which_norm")
         rel_norms = @eval($rel_norms_sym)
         for metric in [:rmse, :crps]
             metric_sym = Symbol(string(metric) * string(which_norm) * "_" * alg_name)
-            metric_dict[metric_sym] = get_Lp(errs, rel_norms, metric)
+            metric_dict[metric_sym] = [get_Lp(errs[j], rel_norms[j, :], metric) for j in 1:Nvar]
         end
     end
 
     # TV, Mass, Entropy
-    tv_alg = reduce(hcat, TV_norm_ensemble(x) for x in X_traj)
-    mass_alg, entropy_alg = map(f -> reduce(hcat, euler_qoi_ens(x, f) for x in X_traj), [Trixi.density, Trixi.entropy])
+    mass_alg = map(mass_ensemble, X_traj)
+    entropy_alg = map(entropy_ensemble, X_traj)
+    tv_alg = map(TV_norm_ensemble, X_traj)
     metric_dict[:mass] = mass_alg
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
@@ -461,9 +460,9 @@ jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do fil
 
     filter_group = JLD2.Group(file, "filters")
     metric_group = JLD2.Group(file, "metrics")
-    metric_group["true_mass"] = mass_true
-    metric_group["true_entropy"] = entropy_true
-    metric_group["true_tv_norm"] = TVN_true
+    metric_group["true_mass"] = mass_data
+    metric_group["true_entropy"] = entropy_data
+    metric_group["true_tv_norm"] = TV_data
     for alg in ["locenkf", "hlocenkf"]
         X_alg = Symbol("X_$alg")
         eval(Expr(:isdefined, X_alg)) || continue
@@ -481,11 +480,9 @@ jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do fil
 end;
 
 # %%
-postproc_locenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_locenkf)
-postproc_hlocenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_hlocenkf)
-
-# %%
 make_figs && with_theme(my_theme) do
+    postproc_locenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_locenkf)
+    postproc_hlocenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_hlocenkf)
     tsnap = length(X_hlocenkf) - 1#minimum(length.([X_hlocenkf, X_locenkf]) .- 1)
     all_idxs = Dict(
         :ρ => (1, idxρ, idxρy_ygrid, idxρθ_θgrid),
@@ -519,6 +516,7 @@ end
 
 # %%
 make_figs && with_theme(my_theme) do
+    postproc_locenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_locenkf)
     cols = Makie.wong_colors()
     N_T = length(data.tt)
     ρ_t = t -> data_plot[:, 1, t]
@@ -561,6 +559,7 @@ end
 
 # %%
 make_figs && with_theme(my_theme) do
+    postproc_hlocenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_hlocenkf)
     cols = Makie.wong_colors()
     N_T = length(data.tt)
     ρ_t = t -> data_plot[:, 1, t]
