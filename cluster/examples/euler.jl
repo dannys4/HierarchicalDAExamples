@@ -38,7 +38,7 @@ delta_t_dyn = 0.02
 delta_t_obs = 0.04
 
 t0 = 0.0
-tf = 2.0
+tf = 1.0
 
 delta_y = 25
 density_thresh, pressure_thresh = 5e-6, 5e-6
@@ -302,9 +302,6 @@ end
 locenkf = LocEnKF(identity, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=false)
 
 # %%
-X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl=0.2)
-
-# %%
 local X_locenkf
 @info "Performing EnKF..."
 try
@@ -373,9 +370,6 @@ else
 end
 
 # %%
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
-
-# %%
 local X_hlocenkf, θ_hlocenkf
 @info "Performing GSBL EnKF..."
 try
@@ -388,16 +382,24 @@ end
 
 # %%
 begin
-    mesh_weights_state = vec(sys_euler.mesh.md.wJq)
-    mesh_weights = repeat(mesh_weights_state, nvariables(equations))
-    calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
-    weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
-    weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
-    rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
-    rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
+    prim2prim = (x, _) -> identity(x)
+    get_traj_quad_pts = traj -> map(x -> get_filter_quad_pts(x, sys_euler), traj)
+    data_quad = get_filter_quad_pts(data.xt, sys_euler)
+    hlocenkf_quad = get_traj_quad_pts(X_hlocenkf)
+    locenkf_quad = get_traj_quad_pts(X_locenkf)
+    mesh_wts = sys_euler.mesh.md.wJq
+    calc_moments = (ensemble, fcn) -> [weight_sum_reduction(fcn, sample, mesh_wts) for sample in eachslice(ensemble, dims=(1, ndims(ensemble)))]
+    # calc_dists = (ensemble, fcn) -> [dist_weight_sum_reduction(fcn, sample, data_quad, mesh_wts) for sample in eachslice(ensemble, dims=(1, ndims(ensemble)))]
+    rel_norms1 = calc_moments(data.xt, abs)  #map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
+    rel_norms2 = calc_moments(data.xt, abs2) #map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
+    function get_errs(X, metric)
+        for j in axes(data_quad, 2)
+
+        end
+    end
     get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
     get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
-    euler_entropy = u -> Trixi.entropy(u, equations)
+    euler_entropy = u -> Trixi.entropy(prim2cons(u), equations)
     euler_qoi_member = (u, fcn) -> mesh_weights_state' * fcn.(eachrow(reshape(u, :, nvariables(equations))), (equations,))
     euler_qoi_ens = (u_ens, fcn) -> euler_qoi_member.(eachcol(u_ens), fcn)
     mass_true, entropy_true = euler_qoi_ens(data.xt, Trixi.density), euler_qoi_ens(data.xt, Trixi.entropy)
@@ -491,25 +493,28 @@ make_figs && with_theme(my_theme) do
         :p => (3, idxp, idxpy_ygrid, idxpθ_θgrid),
     )
     which_var = "v"
-    fig = Figure(size=(1010, 500))
-    ax1 = Axis(fig[1, 1], title="EnKF $(which_var)")
-    ax2 = Axis(fig[1, 2], title="GSBL-EnKF $(which_var)")
-    var_idx, plot_idx, plot_idx_y, plot_idx_θ = all_idxs[Symbol(which_var)]
-    lines!(ax1, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
-    lines!(ax2, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
+    for which_var in ["ρ", "v", "p"]
+        fig = Figure(size=(1010, 500))
+        ax1 = Axis(fig[1, 1], title="EnKF $(which_var)")
+        ax2 = Axis(fig[1, 2], title="GSBL-EnKF $(which_var)")
+        var_idx, plot_idx, plot_idx_y, plot_idx_θ = all_idxs[Symbol(which_var)]
+        lines!(ax1, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
+        lines!(ax2, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
 
-    cols = Makie.wong_colors()
-    for j in 1:Ne
-        col = cols[mod1(j, length(cols))]
-        lines!(ax1, x_plot, postproc_locenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=(col, 0.2))
-        lines!(ax2, x_plot, postproc_hlocenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=(col, 0.2))
+        cols = Makie.wong_colors()
+        for j in 1:Ne
+            col = cols[mod1(j, length(cols))]
+            lines!(ax1, x_plot, postproc_locenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=(col, 0.2))
+            lines!(ax2, x_plot, postproc_hlocenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=(col, 0.2))
+        end
+        scatter!(ax1, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
+        scatter!(ax2, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
+        scatter!(ax2, θgrid, θ_hlocenkf[tsnap+1][plot_idx_θ], label="θ")
+        axislegend(ax1, position=:lc)
+        axislegend(ax2, position=:lc)
+        save(joinpath(@__DIR__, "figs", "euler", "compare_$(which_var)_t$(tsnap).pdf"))
+        display(fig)
     end
-    scatter!(ax1, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
-    scatter!(ax2, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
-    scatter!(ax2, θgrid, θ_hlocenkf[tsnap+1][plot_idx_θ], label="θ")
-    axislegend(ax1, position=:lc)
-    axislegend(ax2, position=:lc)
-    fig
 end
 
 # %%
@@ -535,9 +540,6 @@ make_figs && with_theme(my_theme) do
 
     px_size = 600
     fig = Figure(size=(3px_size, px_size))
-    ax_ρ = Axis(fig[1, 1], xlabel=L"x", title=L"\rho", aspect=1.)
-    ax_v = Axis(fig[1, 2], xlabel=L"x", title=L"v", aspect=1.)
-    ax_p = Axis(fig[1, 3], xlabel=L"x", title=L"p", aspect=1.)
     for (j, vv) in enumerate([("ρ", ρs, locenkf_ρs), ("v", vs, locenkf_vs), ("p", ps, locenkf_ps),])
         which_var, truth, locenkf = vv
         ax = Axis(fig[1, j], xlabel=L"x", title=which_var, aspect=1.)
@@ -586,9 +588,6 @@ make_figs && with_theme(my_theme) do
 
     px_size = 600
     fig = Figure(size=(3px_size, px_size))
-    ax_ρ = Axis(fig[1, 1], xlabel=L"x", title=L"\rho", aspect=1.)
-    ax_v = Axis(fig[1, 2], xlabel=L"x", title=L"v", aspect=1.)
-    ax_p = Axis(fig[1, 3], xlabel=L"x", title=L"p", aspect=1.)
     for (j, vv) in enumerate([("ρ", ρs, hlocenkf_ρs, hlocenkf_θ_ρs), ("v", vs, hlocenkf_vs, hlocenkf_θ_vs), ("p", ps, hlocenkf_ps, hlocenkf_θ_ps),])
         which_var, truth, hlocenkf, hlocenkf_θ_var = vv
         ax = Axis(fig[1, j], xlabel=L"x", title=which_var, aspect=1.)
