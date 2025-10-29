@@ -46,7 +46,7 @@ alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 
 # %%
 # GSBL Hyperparams
-order_PA = 4 # Poly annihilator order
+order_PA = 3 # Poly annihilator order
 Niter = 2
 theta_init = 1.
 hyperprior_idx = 2
@@ -134,19 +134,29 @@ mesh_wts = vec(sys_burgers.mesh.md.wJq)
 ents = [mesh_wts'Trixi.entropy.(x, (sys_burgers.equations,)) for x in eachcol(data.xt)]
 
 # %%
-make_figs && display(lines(ents));
+make_figs && display(lines(ents; axis=(; limits=(0, nothing, 0, nothing))));
 
 # %%
-make_figs && display(heatmap(delta_t_obs * (1:Tf), xgrid, data.xt', axis=(; xlabel=L"t", ylabel=L"x", title=L"Solution of inviscid burgers, $u(x,t)$")));
+x_plot, data_plot = get_plot_ensemble(data.xt, sys_burgers)
+data_plot = data_plot[:, 1, :]
+
+# %%
+if make_figs
+    heatmap_data = interp_columns(data_plot, 10)
+    fig, _ = heatmap(range(t0, tf, length=size(heatmap_data, 1)), x_plot, heatmap_data, axis=(; xlabel=L"t", ylabel=L"x", title=L"Solution of inviscid burgers, $u(x,t)$"))
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.pdf"), fig)
+end
 
 # %%
 make_figs && with_theme(my_theme) do
+    cols = Makie.wong_colors()
     fig = Figure()
     ax = Axis(fig[1, 1])
 
-    lines!(ax, xgrid, data.xt[:, 1])
-    lines!(ax, xgrid, data.xt[:, end])
-    scatter!(ax, xgrid[1:delta_y:end], data.yt[:, end])
+    lines!(ax, x_plot, data_plot[:, 1], color=cols[2])
+    lines!(ax, x_plot, data_plot[:, end], color=cols[1])
+    scatter!(ax, xgrid[1:delta_y:end], data.yt[:, end], color=cols[1])
 
     fig
 end
@@ -225,27 +235,30 @@ hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, del
 
 # %%
 @info "Performing GSBL EnKF..."
-# ϵxbeta_filter = MultiAddInflation(Nx, 1.02, zeros(Nx), 1e-3)
 X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
 begin
     equations = sys_burgers.equations
-    mesh_weights_state = vec(sys_burgers.mesh.md.wJq)
-    mesh_weights = repeat(mesh_weights_state, nvariables(equations))
-    calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
-    weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
-    weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
-    rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
-    rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
-    get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
-    get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
-    advection_entropy = u -> Trixi.entropy(u, equations)
-    TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
-    TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
-    TVN_true = TV_norm_ensemble(data.xt)
-    mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, advection_entropy])
+    Nvar = nvariables(equations)
+    get_traj_quad_pts = traj -> map(x -> reshape(get_filter_quad_pts(x, sys_burgers), Nvar, :, Ne), traj)
+    data_quad = reshape(get_filter_quad_pts(data.xt, sys_burgers), Nvar, :, Tf)
+    mesh_wts = vec(sys_burgers.mesh.md.wJq)
+    rel_norms1 = sum(j -> mesh_wts[j] * abs.(data_quad[:, j, :]), eachindex(mesh_wts))
+    rel_norms2 = sqrt.(sum(j -> mesh_wts[j] * abs2.(data_quad[:, j, :]), eachindex(mesh_wts)))
+    get_errs = (X, metric, which_var) -> map(axes(data.xt, 2)) do t_idx
+        CRPS(X[t_idx+1][which_var, :, :], @view(data_quad[which_var, :, t_idx]), metric, mesh_wts)
+    end
+    get_Lp = (err, rel_norms, prop::Symbol) -> mean(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
 
+    entropy_state = u -> Trixi.entropy(prim2cons(u, equations), equations)
+    entropy_ensemble = u_ens -> map(entropy_state, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
+
+    TV_norm_state = u -> sum(abs, diff(u))
+    TV_norm_ensemble = u_ens -> map(TV_norm_state, eachslice(u_ens, dims=(1, 3)))
+
+    entropy_data = entropy_ensemble(data_quad)
+    TV_data = TV_norm_ensemble(data_quad)
     metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
 end
 
@@ -255,22 +268,22 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_sym = Symbol("metrics_$alg_name")
     metric_dict = @eval($metric_sym)
     X_sym = Symbol("X_$alg_name")
-    X_traj = @eval($X_sym)
+    X_traj = get_traj_quad_pts(@eval($X_sym))
+    isnothing(X_traj) && continue
     for which_norm in [1, 2]
         norm = Symbol("norm$which_norm")
-        errs = get_errs(X_traj, norm)
+        errs = [get_errs(X_traj, norm, j) for j in 1:Nvar]
         rel_norms_sym = Symbol("rel_norms$which_norm")
         rel_norms = @eval($rel_norms_sym)
         for metric in [:rmse, :crps]
             metric_sym = Symbol(string(metric) * string(which_norm) * "_" * alg_name)
-            metric_dict[metric_sym] = get_Lp(errs, rel_norms, metric)
+            metric_dict[metric_sym] = [get_Lp(errs[j], rel_norms[j, :], metric) for j in 1:Nvar]
         end
     end
 
-    # Mass, Entropy, and TV
-    tv_alg = reduce(hcat, TV_norm_ensemble(x) for x in X_traj)
-    mass_alg, entropy_alg = map(f -> reduce(hcat, calc_moments(x, f) for x in X_traj), [abs, advection_entropy])
-    metric_dict[:mass] = mass_alg
+    # TV, Mass, Entropy
+    entropy_alg = map(entropy_ensemble, X_traj)
+    tv_alg = map(TV_norm_ensemble, X_traj)
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
 end
@@ -283,12 +296,12 @@ jldopen(joinpath(data_path, "burgers_" * string(now()) * ".jld2"), "w") do file
     end
 
     data_param_group = JLD2.Group(file, "data_parameters")
-    for data_param in [:random_seed, :polydeg, :Ncells, :delta_t_dyn, :delta_t_obs, :sigma_x_data, :sigma_y, :t0, :tf]
+    for data_param in [:random_seed, :polydeg, :Ncells, :delta_t_dyn, :delta_t_obs, :sigma_x_data, :sigma_y, :t0, :tf, :delta_y]
         data_param_group[string(data_param)] = @eval($data_param)
     end
 
     filter_param_group = JLD2.Group(file, "filter_parameters")
-    for filter_param in [:Ne, :Lrad, :sigma_x_filter, :beta_infl, :alpha_k_f0, :L_f0]
+    for filter_param in [:Ne, :Lrad, :sigma_x_filter, :beta_infl, :alpha_k_f0]
         filter_param_group[string(filter_param)] = @eval($filter_param)
     end
 
@@ -299,18 +312,19 @@ jldopen(joinpath(data_path, "burgers_" * string(now()) * ".jld2"), "w") do file
 
     filter_group = JLD2.Group(file, "filters")
     metric_group = JLD2.Group(file, "metrics")
-    metric_group["true_mass"] = mass_true
-    metric_group["true_entropy"] = entropy_true
-    metric_group["true_tv_norm"] = TVN_true
+    metric_group["true_entropy"] = entropy_data
+    metric_group["true_tv_norm"] = TV_data
     for alg in ["locenkf", "hlocenkf"]
-        metric_subgroup = JLD2.Group(metric_group, alg)
-        metric_alg = Symbol("metrics_$alg")
-        metric_dict = @eval($metric_alg)
-        for key in keys(metric_dict)
-            metric_subgroup[string(key)] = metric_dict[key]
-        end
         X_alg = Symbol("X_$alg")
-        filter_group[string(X_alg)] = @eval($X_alg)
+        X_traj = @eval($X_alg)
+        filter_group[string(X_alg)] = X_traj
+
+        metric_sym = Symbol("metrics_$alg")
+        metric_dict = @eval($metric_sym)
+        metric_subgroup = JLD2.Group(metric_group, alg)
+        for metric in keys(metric_dict)
+            metric_subgroup[string(metric)] = metric_dict[metric]
+        end
     end
 end;
 
@@ -326,13 +340,10 @@ make_figs && with_theme(my_theme) do
     cols = Makie.wong_colors()
 
     fig = Figure()
-
     ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
 
-    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
     lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
     lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
-    # lines!(ax1, xgrid, ys, linewidth=3, label="State")
     scatter!(ax1, xgrid, theta_tsnap, label="θ", markersize=5)
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.4))
@@ -388,7 +399,6 @@ make_figs && with_theme(my_theme) do
 
     ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
 
-    # scatter!(ax1, xgrid, x_tsnap, label = "Truth")
     lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
     lines!(ax1, xgrid, ys, linewidth=3, label="State")
     lines!(ax1, xgrid, theta_tsnap, linewidth=3, label="θ")
@@ -407,37 +417,6 @@ make_figs && with_theme(my_theme) do
     save(joinpath(@__DIR__, "figs", "burgers", "assim_hlenkf.mp4"), anim)
     display(anim)
 end
-
-# %%
-make_figs && with_theme(my_theme) do
-    fig = Figure(fontsize=20, size=(1200, 400))
-
-    ax1 = Axis(fig[1, 1],
-        title=L"\text{Truth}",
-        xlabel=L"t",
-        ylabel=L"x",)
-
-    h1 = heatmap!(ax1, data.tt, xgrid, data.xt')
-
-    Colorbar(fig[1, 4], h1, label=L"u(x, t)")
-
-
-    ax2 = Axis(fig[1, 2],
-        title=L"\text{EnKF}",
-        xlabel=L"t",
-        ylabel=L"x",)
-    h2 = heatmap!(ax2, data.tt, xgrid, mean_hist(X_locenkf)[:, 2:end]')
-
-
-    ax3 = Axis(fig[1, 3],
-        title=L"\text{GSBL EnKF}",
-        xlabel=L"t",
-        ylabel=L"x",)
-    h3 = heatmap!(ax3, data.tt, xgrid, mean_hist(X_hlocenkf)[:, 2:end]')
-
-    save(joinpath(@__DIR__, "figs", "burgers", "heatmap_inviscid_burgers.png"), fig)
-    display(fig)
-end;
 
 # %%
 make_figs && with_theme(my_theme) do
@@ -470,4 +449,68 @@ make_figs && with_theme(my_theme) do
     end
     save(joinpath(@__DIR__, "figs", "burgers", "assim_lenkf.mp4"), anim)
     display(anim)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    mean_locenkf = mean_hist(X_locenkf)[:, 1:end-1]
+    mean_hlocenkf = mean_hist(X_hlocenkf)[:, 1:end-1]
+    _, mean_locenkf = get_plot_ensemble(mean_locenkf, sys_burgers)
+    _, mean_hlocenkf = get_plot_ensemble(mean_hlocenkf, sys_burgers)
+    mean_locenkf = mean_locenkf[:, 1, :]
+    mean_hlocenkf = mean_hlocenkf[:, 1, :]
+    heatmap_locenkf = interp_columns(mean_locenkf, N_interp)
+    heatmap_hlocenkf = interp_columns(mean_hlocenkf, N_interp)
+    colorrange = extrema(reduce(vcat, collect(extrema(x)) for x in [heatmap_data, heatmap_locenkf, heatmap_hlocenkf]))
+    fig = Figure(fontsize=20, size=(1200, 400))
+    ax1 = Axis(fig[1, 1],
+        title=L"\text{Truth}",
+        xlabel=L"t",
+        ylabel=L"x",)
+    ax2 = Axis(fig[1, 2],
+        title=L"\text{EnKF}",
+        xlabel=L"t",
+        ylabel=L"x",)
+    ax3 = Axis(fig[1, 3],
+        title=L"\text{GSBL EnKF}",
+        xlabel=L"t",
+        ylabel=L"x",)
+    tgrid_plot = range(t0, tf, length=size(heatmap_data, 1))
+    h1 = heatmap!(ax1, tgrid_plot, x_plot, heatmap_data; colorrange)
+    heatmap!(ax2, tgrid_plot, x_plot, heatmap_locenkf; colorrange)
+    heatmap!(ax3, tgrid_plot, x_plot, heatmap_hlocenkf; colorrange)
+    Colorbar(fig[1, 4], label=L"u(x, t)"; colorrange)
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.pdf"), fig)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure(size=(1050, 500))
+    entropy_locenkf = reduce(hcat, metrics_locenkf[:entropy])'
+    entropy_hlocenkf = reduce(hcat, metrics_hlocenkf[:entropy])'
+    ylims = extrema(reduce(hcat, collect(extrema(x)) for x in [entropy_locenkf, entropy_hlocenkf]))
+    ax1 = Axis(fig[1, 1],
+        title="Burgers Entropy, EnKF",
+        aspect=1.,
+        xlabel=L"t",
+        ylabel="Entropy",
+        limits=(t0, tf, ylims...)
+    )
+    ax2 = Axis(fig[1, 2],
+        title="Burgers Entropy, GSBL-EnKF",
+        aspect=1.,
+        xlabel=L"t",
+        limits=(t0, tf, ylims...)
+    )
+    lines!(ax1, data.tt, entropy_data, linewidth=3, label="Entropy of solution")
+    lines!(ax2, data.tt, entropy_data, linewidth=3, label="Entropy of solution")
+    for ens_idx in 1:Ne
+        lines!(ax1, data.tt, entropy_locenkf[2:end, ens_idx], linewidth=0.5)
+        lines!(ax2, data.tt, entropy_hlocenkf[2:end, ens_idx], linewidth=0.5)
+    end
+    axislegend(ax1)
+    axislegend(ax2)
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "entropy.pdf"), fig)
 end

@@ -379,24 +379,18 @@ end
 begin
     get_traj_quad_pts = traj -> map(x -> reshape(get_filter_quad_pts(x, sys_euler), Nvar, :, Ne), traj)
     data_quad = reshape(get_filter_quad_pts(data.xt, sys_euler), Nvar, :, Tf)
-    # hlocenkf_quad = get_traj_quad_pts(X_hlocenkf)
-    # locenkf_quad = get_traj_quad_pts(X_locenkf)
     mesh_wts = vec(sys_euler.mesh.md.wJq)
-    # calc_moments = (ensemble, fcn) -> [weight_sum_reduction(fcn, sample, mesh_wts) for sample in eachslice(ensemble, dims=(1, ndims(ensemble)))]
-    # calc_dists = (ensemble, fcn) -> [dist_weight_sum_reduction(fcn, sample, data_quad, mesh_wts) for sample in eachslice(ensemble, dims=(1, ndims(ensemble)))]
     rel_norms1 = sum(j -> mesh_wts[j] * abs.(data_quad[:, j, :]), eachindex(mesh_wts))
     rel_norms2 = sqrt.(sum(j -> mesh_wts[j] * abs2.(data_quad[:, j, :]), eachindex(mesh_wts)))
-    # rel_norms1 = calc_moments(data.xt, abs)  #map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
-    # rel_norms2 = calc_moments(data.xt, abs2) #map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
     get_errs = (X, metric, which_var) -> map(axes(data.xt, 2)) do t_idx
         CRPS(X[t_idx+1][which_var, :, :], @view(data_quad[which_var, :, t_idx]), metric, mesh_wts)
     end
     get_Lp = (err, rel_norms, prop::Symbol) -> mean(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
-    euler_density = u -> Trixi.density(prim2cons(u, equations), equations)
-    mass_ensemble = u_ens -> map(euler_density, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
+    density_state = u -> Trixi.density(prim2cons(u, equations), equations)
+    mass_ensemble = u_ens -> map(density_state, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
 
-    euler_entropy = u -> Trixi.entropy(prim2cons(u, equations), equations)
-    entropy_ensemble = u_ens -> map(euler_entropy, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
+    entropy_state = u -> Trixi.entropy(prim2cons(u, equations), equations)
+    entropy_ensemble = u_ens -> map(entropy_state, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
 
     TV_norm_state = u -> sum(abs, diff(u))
     TV_norm_ensemble = u_ens -> map(TV_norm_state, eachslice(u_ens, dims=(1, 3)))
