@@ -25,7 +25,7 @@ make_figs = true
 
 # %%
 # Problem setup params
-polydeg = 4 # Order in space
+polydeg = 5 # Order in space
 Ncells = 100 # Number of DG cells
 delta_y = 25 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
@@ -46,10 +46,10 @@ alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 
 # %%
 # GSBL Hyperparams
-order_PA = 3 # Poly annihilator order
+order_PA = 5 # Poly annihilator order
 Niter = 2
 theta_init = 1.
-hyperprior_idx = 2
+hyperprior_idx = 3
 
 # %%
 # Assign any given arguments
@@ -141,7 +141,7 @@ x_plot, data_plot = get_plot_ensemble(data.xt, sys_burgers)
 data_plot = data_plot[:, 1, :]
 
 # %%
-if make_figs
+make_figs && with_theme(my_theme) do
     heatmap_data = interp_columns(data_plot, 10)
     fig, _ = heatmap(range(t0, tf, length=size(heatmap_data, 1)), x_plot, heatmap_data, axis=(; xlabel=L"t", ylabel=L"x", title=L"Solution of inviscid burgers, $u(x,t)$"))
     display(fig)
@@ -181,7 +181,8 @@ idx = vcat(collect(1:length(yidx))', collect(yidx)')
 
 # Create Localization structure
 metric = PeriodicMetric(Nx)
-Loc = Localization(Nx, Lrad, metric, is_sparse=true)
+Loc = Localization(xgrid, Lrad, metric, symm_kernel=true, is_sparse=true)
+
 # beta_infl, sigma_x_filter = 1.04, 0.1
 ϵxbeta_filter = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
@@ -330,29 +331,42 @@ end;
 
 # %%
 make_figs && with_theme(my_theme) do
-    tsnap = length(X_hlocenkf) ÷ 2
-    x_tsnap = data.xt[:, tsnap]
-    X_hlocenkf_tsnap = vec(mean(X_hlocenkf[tsnap+1]; dims=2))
-    X_ens_tsnap = [X_hlocenkf[tsnap+1][:, j] for j in 1:Ne]
-    theta_tsnap = θ_hlocenkf[tsnap+1]
-    theta_tsnap *= 0.1 / maximum(theta_tsnap)
+    tsnap = length(X_hlocenkf) ÷ 4
+    t_val = data.tt[tsnap]
+    x_tsnap = data_plot[:, tsnap]
     y_tsnap = data.yt[:, tsnap]
+
+    _, X_enkf_tsnap = get_plot_ensemble(X_locenkf[tsnap+1], sys_burgers)
+    X_enkf_tsnap = X_enkf_tsnap[:, 1, :]
+    X_locenkf_tsnap = vec(mean(X_enkf_tsnap; dims=2))
+
+    _, X_gsbl_tsnap = get_plot_ensemble(X_hlocenkf[tsnap+1], sys_burgers)
+    X_gsbl_tsnap = X_gsbl_tsnap[:, 1, :]
+    X_hlocenkf_tsnap = vec(mean(X_gsbl_tsnap; dims=2))
+    theta_tsnap = θ_hlocenkf[tsnap+1]
     cols = Makie.wong_colors()
 
-    fig = Figure()
-    ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
+    fig = Figure(size=(750, 550))
+    ax_enkf = Axis(fig[1, 1], title="EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_gsbl = Axis(fig[2, 1], title="GSBL-EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_theta = Axis(fig[3, 1], ylabel=L"\theta", aspect=10, xlabel=L"x")
+    linkxaxes!(ax_enkf, ax_gsbl, ax_theta)
 
-    lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
-    lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
-    scatter!(ax1, xgrid, theta_tsnap, label="θ", markersize=5)
+    lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
+    lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
+    scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5, color=cols[2])
     for j in 1:Ne
-        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.4))
+        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
+        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
     end
-    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
-
-    axislegend(ax1)
-
+    lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_gsbl, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
+    lines!(ax_enkf, x_plot, X_locenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_enkf, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
+    axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
     display(fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.png"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.pdf"), fig)
 end
 
 # %%
@@ -482,6 +496,7 @@ make_figs && with_theme(my_theme) do
     Colorbar(fig[1, 4], label=L"u(x, t)"; colorrange)
     display(fig)
     save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.png"), fig)
 end
 
 # %%
@@ -513,4 +528,5 @@ make_figs && with_theme(my_theme) do
     axislegend(ax2)
     display(fig)
     save(joinpath(@__DIR__, "figs", "burgers", "entropy.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "entropy.png"), fig)
 end

@@ -45,7 +45,7 @@ sigma_y = 0.05
 # %%
 # Important parameters for data assimilation
 Ne = 50 # Ensemble size
-Lrad = 7 # Localization radius
+Lrad = 0.01 # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0 = 0.8 # Parameter for initial condition
@@ -204,8 +204,8 @@ yidx = 1:delta_y:Nx
 
 # Create Localization structure
 # Gxx(i, j) = periodicmetric!(i, j, Nx)
-metric = PeriodicMetric(Nx)
-Loc = Localization(Nx, Lrad, metric, is_sparse=true)
+metric = PeriodicMetric(round.(extrema(xgrid))...)
+Loc = Localization(xgrid, Lrad, metric, symm_kernel=true, is_sparse=true)
 ϵxβ_enkf = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
@@ -248,25 +248,30 @@ hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, del
 
 # %%
 @info "Performing GSBL EnKF..."
-X_hlocenkf, θhist = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
 # %%
 begin
-    mesh_weights_state = vec(sys_advection.mesh.md.wJq)
-    mesh_weights = repeat(mesh_weights_state, nvariables(equations))
-    calc_moments = (ensemble, moment) -> weight_sum_reduction.(eachcol(ensemble), (moment,), (mesh_weights,))
-    weighted_norm1 = (x, w) -> sum(dim_idx -> w[dim_idx] * abs(x[dim_idx]), eachindex(x, w))
-    weighted_norm2 = (x, w) -> sqrt(sum(dim_idx -> w[dim_idx] * abs2(x[dim_idx]), eachindex(x, w)))
-    rel_norms1 = calc_moments(data.xt, abs)# map(Base.Fix2(weighted_norm1, mesh_weights), eachcol(data.xt))
-    rel_norms2 = map(Base.Fix2(weighted_norm2, mesh_weights), eachcol(data.xt))
-    get_errs = (X, metric) -> map(j -> CRPS(X[j+1], @view(data.xt[:, j]), metric, mesh_weights), axes(data.xt, 2))
-    get_Lp = (err, rel_norms, prop::Symbol) -> mean(er -> getproperty(er[1], prop) / er[2], zip(err, rel_norms))
-    advection_entropy = u -> Trixi.entropy(u, sys_advection.equations)
-    TV_norm_state = u -> sum(abs, diff(reshape(u, :, nvariables(equations)), dims=1))
-    TV_norm_ensemble = u_ens -> TV_norm_state.(eachcol(u_ens))
-    TVN_true = TV_norm_ensemble(data.xt)
-    mass_true, entropy_true = map(f -> calc_moments(data.xt, f), [abs, advection_entropy])
+    equations = sys_advection.equations
+    Nvar = nvariables(equations)
+    get_traj_quad_pts = traj -> map(x -> reshape(get_filter_quad_pts(x, sys_advection), Nvar, :, Ne), traj)
+    data_quad = reshape(get_filter_quad_pts(data.xt, sys_advection), Nvar, :, Tf)
+    mesh_wts = vec(sys_advection.mesh.md.wJq)
+    rel_norms1 = sum(j -> mesh_wts[j] * abs.(data_quad[:, j, :]), eachindex(mesh_wts))
+    rel_norms2 = sqrt.(sum(j -> mesh_wts[j] * abs2.(data_quad[:, j, :]), eachindex(mesh_wts)))
+    get_errs = (X, metric, which_var) -> map(axes(data.xt, 2)) do t_idx
+        CRPS(X[t_idx+1][which_var, :, :], @view(data_quad[which_var, :, t_idx]), metric, mesh_wts)
+    end
+    get_Lp = (err, rel_norms, prop::Symbol) -> mean(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
 
+    entropy_state = u -> Trixi.entropy(prim2cons(u, equations), equations)
+    entropy_ensemble = u_ens -> map(entropy_state, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
+
+    TV_norm_state = u -> sum(abs, diff(u))
+    TV_norm_ensemble = u_ens -> map(TV_norm_state, eachslice(u_ens, dims=(1, 3)))
+
+    entropy_data = entropy_ensemble(data_quad)
+    TV_data = TV_norm_ensemble(data_quad)
     metrics_locenkf, metrics_hlocenkf = Dict{Symbol,Any}(), Dict{Symbol,Any}()
 end
 
@@ -276,22 +281,22 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_sym = Symbol("metrics_$alg_name")
     metric_dict = @eval($metric_sym)
     X_sym = Symbol("X_$alg_name")
-    X = @eval($X_sym)
+    X_traj = get_traj_quad_pts(@eval($X_sym))
+    isnothing(X_traj) && continue
     for which_norm in [1, 2]
         norm = Symbol("norm$which_norm")
-        errs = get_errs(X, norm)
+        errs = [get_errs(X_traj, norm, j) for j in 1:Nvar]
         rel_norms_sym = Symbol("rel_norms$which_norm")
         rel_norms = @eval($rel_norms_sym)
         for metric in [:rmse, :crps]
             metric_sym = Symbol(string(metric) * string(which_norm) * "_" * alg_name)
-            metric_dict[metric_sym] = get_Lp(errs, rel_norms, metric)
+            metric_dict[metric_sym] = [get_Lp(errs[j], rel_norms[j, :], metric) for j in 1:Nvar]
         end
     end
 
-    # Mass, Entropy, and TV
-    tv_alg = reduce(hcat, TV_norm_ensemble(x) for x in X)
-    mass_alg, entropy_alg = map(f -> reduce(hcat, calc_moments(x, f) for x in X), [abs, advection_entropy])
-    metric_dict[:mass] = mass_alg
+    # TV, Mass, Entropy
+    entropy_alg = map(entropy_ensemble, X_traj)
+    tv_alg = map(TV_norm_ensemble, X_traj)
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
 end
@@ -304,7 +309,7 @@ jldopen(joinpath(data_path, "advection_" * string(now()) * ".jld2"), "w") do fil
     end
 
     data_param_group = JLD2.Group(file, "data_parameters")
-    for data_param in [:random_seed, :polydeg, :Ncells, :delta_t_dyn, :delta_t_obs, :sigma_x_data, :sigma_y, :t0, :tf]
+    for data_param in [:random_seed, :polydeg, :Ncells, :delta_t_dyn, :delta_t_obs, :sigma_x_data, :sigma_y, :t0, :tf, :delta_y]
         data_param_group[string(data_param)] = @eval($data_param)
     end
 
@@ -320,18 +325,19 @@ jldopen(joinpath(data_path, "advection_" * string(now()) * ".jld2"), "w") do fil
 
     filter_group = JLD2.Group(file, "filters")
     metric_group = JLD2.Group(file, "metrics")
-    metric_group["true_mass"] = mass_true
-    metric_group["true_entropy"] = entropy_true
-    metric_group["true_tv_norm"] = TVN_true
+    metric_group["true_entropy"] = entropy_data
+    metric_group["true_tv_norm"] = TV_data
     for alg in ["locenkf", "hlocenkf"]
-        metric_subgroup = JLD2.Group(metric_group, alg)
-        metric_alg = Symbol("metrics_$alg")
-        metric_dict = @eval($metric_alg)
-        for key in keys(metric_dict)
-            metric_subgroup[string(key)] = metric_dict[key]
-        end
         X_alg = Symbol("X_$alg")
-        filter_group[string(X_alg)] = @eval($X_alg)
+        X_traj = @eval($X_alg)
+        filter_group[string(X_alg)] = X_traj
+
+        metric_sym = Symbol("metrics_$alg")
+        metric_dict = @eval($metric_sym)
+        metric_subgroup = JLD2.Group(metric_group, alg)
+        for metric in keys(metric_dict)
+            metric_subgroup[string(metric)] = metric_dict[metric]
+        end
     end
 end;
 
@@ -345,6 +351,50 @@ make_figs && with_theme(my_theme) do
     lines!(xgrid_S, sp, linewidth=3, label="PA application")
     axislegend()
     display(fig)
+end
+
+# %%
+x_plot, data_plot = get_plot_ensemble(data.xt, sys_advection)
+data_plot = data_plot[:, 1, :]
+
+# %%
+make_figs && with_theme(my_theme) do
+    tsnap = length(X_hlocenkf) - 1
+    t_val = data.tt[tsnap]
+    x_tsnap = data_plot[:, tsnap]
+    y_tsnap = data.yt[:, tsnap]
+
+    _, X_enkf_tsnap = get_plot_ensemble(X_locenkf[tsnap+1], sys_advection)
+    X_enkf_tsnap = X_enkf_tsnap[:, 1, :]
+    X_locenkf_tsnap = vec(mean(X_enkf_tsnap; dims=2))
+
+    _, X_gsbl_tsnap = get_plot_ensemble(X_hlocenkf[tsnap+1], sys_advection)
+    X_gsbl_tsnap = X_gsbl_tsnap[:, 1, :]
+    X_hlocenkf_tsnap = vec(mean(X_gsbl_tsnap; dims=2))
+    theta_tsnap = θ_hlocenkf[tsnap+1]
+    cols = Makie.wong_colors()
+
+    fig = Figure(size=(750, 550))
+    ax_enkf = Axis(fig[1, 1], title="EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_gsbl = Axis(fig[2, 1], title="GSBL-EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_theta = Axis(fig[3, 1], ylabel=L"\theta", aspect=10, xlabel=L"x")
+    linkxaxes!(ax_enkf, ax_gsbl, ax_theta)
+
+    lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
+    lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
+    scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5, color=cols[2])
+    for j in 1:Ne
+        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
+        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
+    end
+    lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_gsbl, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
+    lines!(ax_enkf, x_plot, X_locenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_enkf, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
+    axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.png"), fig)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.pdf"), fig)
 end
 
 # %%

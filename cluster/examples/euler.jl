@@ -52,7 +52,7 @@ sigma_x_data = 0.0
 alpha_k_f0, L_f0 = 1.0, 10.0
 sigma_x_filter = 0.05
 beta_infl = 1.02
-Lrad = polydeg + 1
+Lrad = 0.1
 Ne = 50
 cfl = 0.9
 
@@ -280,7 +280,7 @@ sys_y = ObsSystem(H, Cϵ)
 
 # Create Localization structure
 metric = CartesianMetric(; Nvar)
-Loc = Localization(Nx, Lrad, metric, is_sparse=true, is_herm=false)
+Loc = Localization(xgrid, Lrad, metric, symm_kernel=true, is_sparse=true)
 
 filter_inflation = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
