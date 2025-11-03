@@ -22,7 +22,7 @@ proj_path = joinpath(@__DIR__, "..")
 random_seed = rand(UInt)
 
 proj_path = joinpath(@__DIR__, "../..")
-make_figs = true
+make_figs = false
 
 # %%
 # Problem setup params
@@ -41,7 +41,7 @@ t0, tf = 0.0, 0.75 # Start and end time
 # Important parameters for data assimilation
 Ne = 50 # Ensemble size
 Nx_dim = Ncells_dim * (polydeg + 1)
-Lrad = polydeg + 1 # Localization radius
+Lrad = 0.10 # Localization radius
 sigma_x_filter = 0.25 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
@@ -49,10 +49,10 @@ cg_tol = 1e-2
 
 # %%
 # GSBL Hyperparams
-order_PA = 2 # Poly annihilator order
+order_PA = 3 # Poly annihilator order
 Niter = 2
 theta_init = 1.
-hyperprior_idx = 2
+hyperprior_idx = 1
 
 # %%
 # Assign any given arguments
@@ -160,7 +160,8 @@ make_figs && with_theme(my_theme) do
 end
 
 # %%
-Loc = Localization(sys_kpp, Lrad; Nvar, isperiodic=true)
+metric = PeriodicMetric(-2, 2)
+Loc = Localization(sys_kpp, Lrad, metric; Nvar, isperiodic=true)
 
 # %%
 Cϵ = LinearMap(ϵy.Σ, Ny)
@@ -181,21 +182,22 @@ X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(x0_ens), mo
 
 # %%
 # Selection of hyper-prior parameters
-# power parameter
 
+# power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
+
 # shape parameter
 β_range = [1.001 + Ne / 2, 2.5918 + Ne / 2, 2.0165, 1.0017];
 β_GSBL = β_range[hyperprior_idx] # shape parameter
 
-unadj_means = [β_range[1], β_range[2] * (β_range[2] + 1), 1 / ((β_range[3] - 2) * (β_range[3] - 1)), 1 / (β_range[4] - 1)]
-target_mean = 0.0724
+# unadj_means = [β_range[1], β_range[2] * (β_range[2] + 1), 1 / ((β_range[3] - 2) * (β_range[3] - 1)), 1 / (β_range[4] - 1)]
+# target_mean = 0.0724
+# ϑ_range = target_mean ./ unadj_means;
 
 # rate parameters
-ϑ_range = target_mean ./ unadj_means;
+ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
-# ϑ_GSBL = 1e-1
 
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
