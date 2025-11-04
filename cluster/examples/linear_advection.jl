@@ -20,8 +20,8 @@ data_path = joinpath(@__DIR__, "data")
 proj_path = joinpath(@__DIR__, "..")
 random_seed = rand(UInt)
 
-proj_path = joinpath(@__DIR__, "../..")
-make_figs = true
+#proj_path = joinpath(@__DIR__, "../..")
+#make_figs = true
 
 # %%
 # PDE solution parameters
