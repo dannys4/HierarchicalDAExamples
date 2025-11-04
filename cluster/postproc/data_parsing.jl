@@ -43,6 +43,14 @@ ff["df"] = DataFrame()
 close(ff)
 
 # %%
+squeeze(obj) = obj
+
+function squeeze(arr::AbstractArray{T,N}) where {T,N}
+    sz = collect(size(arr))
+    which_keep = sz[sz .!= 1]
+    collect(reshape(arr, which_keep...))
+end
+
 function flatten_properties(::Type{AcceptableType},
     obj,
     obj_name::String,
@@ -65,7 +73,7 @@ end
 DEFAULT_KEEP_PARAMS = ["data_parameters", "filter_parameters", "GSBL_parameters"]
 
 function process_file(file::JLD2.JLDFile,
-    ::Type{AcceptableType}=Union{<:Real,<:AbstractString,<:AbstractArray{<:Real}};
+    ::Type{AcceptableType}=Union{<:Real,<:AbstractString,<:AbstractVecOrMat{<:Real},<:AbstractVector{<:AbstractVector}};
     keep_params=DEFAULT_KEEP_PARAMS,
     metrics_group="metrics",
     preproc!::Function=Returns(nothing)) where {AcceptableType}
@@ -95,7 +103,8 @@ function process_file(file::JLD2.JLDFile,
             row_alg = Pair{Symbol,AcceptableType}[:id=>uuid, :algorithm=>metric_key]
             for metric in keys(metric_val)
                 metric_name = split(metric, "_")[1] # Some things are (metric)_(alg_name)
-                push!(row_alg, Symbol(metric_name) => metric_val[metric])
+                push_val = squeeze.(metric_val[metric])
+                push!(row_alg, Symbol(metric_name) => push_val)
             end
             push!(alg_rows, row_alg)
         else
