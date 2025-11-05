@@ -25,13 +25,13 @@ random_seed = rand(UInt)
 
 # %%
 # Problem setup params
-polydeg = 5 # Order in space
+polydeg = 3 # Order in space
 Ncells = 100 # Number of DG cells
 delta_y = 25 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
 delta_t_obs = 0.025 # Amount of time between each observation
 
-sigma_x_data = 1e-3 # Noise in the state dynamics (i.e., the PDE solution itself)
+sigma_x_data = 0. # Noise in the state dynamics (i.e., the PDE solution itself)
 sigma_y = 0.05 # Noise in the state observation (i.e., what the "sensors" record)
 
 t0, tf = 0.0, 1.0 # Start and end time
@@ -46,10 +46,10 @@ alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 
 # %%
 # GSBL Hyperparams
-order_PA = 5 # Poly annihilator order
-Niter = 2
+order_PA = 2 # Poly annihilator order
+Niter = 5
 theta_init = 1.
-hyperprior_idx = 3
+hyperprior_idx = 2
 
 # %%
 # Assign any given arguments
@@ -72,8 +72,7 @@ isdefined(Main, :IJulia) || for arg in ARGS
     @eval($sym_key = $val_T)
 end
 
-Lrad = 2 * delta_y / ((polydeg + 1)*Ncells) # Localization radius
-
+Lrad = 2 * delta_y / ((polydeg + 1) * Ncells) # Localization radius
 
 # %%
 using Pkg
@@ -183,7 +182,7 @@ yidx = 1:delta_y:Nx
 idx = vcat(collect(1:length(yidx))', collect(yidx)')
 
 # Create Localization structure
-metric = PeriodicMetric(Nx)
+metric = PeriodicMetric(-1, 1)
 Loc = Localization(xgrid, Lrad, metric, symm_kernel=true, is_sparse=true)
 
 # beta_infl, sigma_x_filter = 1.04, 0.1
@@ -218,6 +217,7 @@ beta_GSBL = beta_range[hyperprior_idx] # shape parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
+ϑ_GSBL = 1e-6
 
 dist = GeneralizedGamma(r_GSBL, beta_GSBL, ϑ_GSBL);
 
@@ -334,7 +334,7 @@ end;
 
 # %%
 make_figs && with_theme(my_theme) do
-    tsnap = length(X_hlocenkf) ÷ 4
+    tsnap = length(X_hlocenkf) - 1 #10 # length(X_hlocenkf) ÷ 4
     t_val = data.tt[tsnap]
     x_tsnap = data_plot[:, tsnap]
     y_tsnap = data.yt[:, tsnap]
@@ -368,8 +368,8 @@ make_figs && with_theme(my_theme) do
     scatter!(ax_enkf, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
     axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
     display(fig)
-    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.png"), fig)
-    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.pdf"), fig)
+    # save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.png"), fig)
+    # save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.pdf"), fig)
 end
 
 # %%
