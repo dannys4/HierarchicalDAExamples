@@ -22,7 +22,7 @@ using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie
 
 # %%
 data_path = joinpath(@__DIR__, "data")
-example_name = "linear_advection"
+example_name = "burgers"
 filename = example_name * ".jld2"
 
 # %%
@@ -128,7 +128,7 @@ end
 
 # %%
 fixed_key = :Ne
-x_axis = :sigma_x_filter
+x_axis = :sigma_y
 y_axis = :crps2
 marker_diffs = :delta_y
 line_style = :algorithm
@@ -150,7 +150,7 @@ end
 xticks = [(val, string(val)) for val in [0.01, 0.025, 0.05, 0.1]]
 xminorticks = 0.01 * (1:0.5:10)
 with_theme(theme_latexfonts(), figure_padding = 0., Axis=(
-    aspect=1, xlabel=L"$\sigma_x$, log-scale", ylabel=get_ylabel(y_axis),
+    aspect=1, xlabel=L"$\sigma_y$, log-scale", ylabel=get_ylabel(y_axis),
     xscale=log10, yscale=log10,
     xticks=first.(xticks),
     xticklabels=last.(xticks),

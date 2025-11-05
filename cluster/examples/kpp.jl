@@ -22,9 +22,7 @@ proj_path = joinpath(@__DIR__, "..")
 random_seed = rand(UInt)
 
 proj_path = joinpath(@__DIR__, "../..")
-# proj_path = joinpath(@__DIR__, "../..")
-# make_figs = true
-make_figs = false
+make_figs = true
 
 # %%
 # Problem setup params
@@ -200,7 +198,7 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
-
+r_GSBL, β_GSBL, ϑ_GSBL, order_PA = -1, 1, 0.01, 2
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%

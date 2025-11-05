@@ -39,8 +39,8 @@ end
 data_path = joinpath(@__DIR__, "data")
 sim_subdir = most_recent_subdir(data_path, "sim")
 hloc_file_path, time_idx = get_file_path("HLocEnKF", sim_subdir)
-loc_file_path, _ = get_file_path("LocEnKF", sim_subdir, time_idx)
-@info "" sim_subdir time_idx hloc_file_path loc_file_path
+# loc_file_path, _ = get_file_path("LocEnKF", sim_subdir, time_idx)
+@info "" sim_subdir time_idx hloc_file_path # loc_file_path
 @load joinpath(sim_subdir, "data.jld2") data polydeg Ncells_dim
 sys_kpp = setup_kpp(polydeg, Ncells_dim);
 
@@ -59,10 +59,10 @@ X = nothing
 itp_data = ensemble_to_itp(data.xt[:, time_idx:time_idx], sys_kpp)
 itp_hlocenkf = ensemble_to_itp(X_hlocenkf, sys_kpp)
 # itp_hlocenkf_θ = ensemble_to_itp(reshape(log10.(θ_hlocenkf), :, 2), sys_kpp)
-itp_locenkf = ensemble_to_itp(X_locenkf, sys_kpp)
+# itp_locenkf = ensemble_to_itp(X_locenkf, sys_kpp)
 
 # %%
-fig_samples = trixiheatmaps(map(x -> x[:, :, 1], [itp_hlocenkf, itp_locenkf, itp_data]), ["GSBL-DA sample", "EnKF sample", "Solution"], sys_kpp)
+fig_samples = trixiheatmaps(map(x -> x[:, :, 1], [itp_hlocenkf, itp_data]), ["GSBL-DA sample", "Solution"], sys_kpp)
 display(fig_samples)
 save(joinpath(@__DIR__, "figs/kpp_samples1.png"), fig_samples)
 

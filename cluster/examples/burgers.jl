@@ -39,7 +39,7 @@ t0, tf = 0.0, 1.0 # Start and end time
 # %%
 # Important parameters for data assimilation
 Ne = 40 # Ensemble size
-Lrad = 2 * delta_y / ((polydeg + 1)*Ncells) # Localization radius
+Lrad = 0.05 # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
@@ -71,6 +71,9 @@ isdefined(Main, :IJulia) || for arg in ARGS
     end
     @eval($sym_key = $val_T)
 end
+
+Lrad = 2 * delta_y / ((polydeg + 1)*Ncells) # Localization radius
+
 
 # %%
 using Pkg
