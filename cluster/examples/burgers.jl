@@ -25,11 +25,11 @@ random_seed = rand(UInt)
 
 # %%
 # Problem setup params
-polydeg = 3 # Order in space
-Ncells = 100 # Number of DG cells
-delta_y = 25 # Spatial frequency of observation. Not regularly spaced
+polydeg = 4 # Order in space
+Ncells = 75 # Number of DG cells
+delta_y = 50 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
-delta_t_obs = 0.025 # Amount of time between each observation
+delta_t_obs = 0.05 # Amount of time between each observation
 
 sigma_x_data = 0. # Noise in the state dynamics (i.e., the PDE solution itself)
 sigma_y = 0.05 # Noise in the state observation (i.e., what the "sensors" record)
@@ -39,17 +39,17 @@ t0, tf = 0.0, 1.0 # Start and end time
 # %%
 # Important parameters for data assimilation
 Ne = 40 # Ensemble size
-Lrad = 0.05 # Localization radius
+Lrad = delta_t_obs # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 
 # %%
 # GSBL Hyperparams
-order_PA = 2 # Poly annihilator order
+order_PA = 3 # Poly annihilator order
 Niter = 5
 theta_init = 1.
-hyperprior_idx = 2
+hyperprior_idx = 3
 
 # %%
 # Assign any given arguments
@@ -72,7 +72,7 @@ isdefined(Main, :IJulia) || for arg in ARGS
     @eval($sym_key = $val_T)
 end
 
-Lrad = 2 * delta_y / ((polydeg + 1) * Ncells) # Localization radius
+# Lrad = 0.05 #delta_y / ((polydeg + 1) * Ncells) # Localization radius
 
 # %%
 using Pkg
@@ -155,11 +155,9 @@ make_figs && with_theme(my_theme) do
     cols = Makie.wong_colors()
     fig = Figure()
     ax = Axis(fig[1, 1])
-
     lines!(ax, x_plot, data_plot[:, 1], color=cols[2])
     lines!(ax, x_plot, data_plot[:, end], color=cols[1])
     scatter!(ax, xgrid[1:delta_y:end], data.yt[:, end], color=cols[1])
-
     fig
 end
 
@@ -170,7 +168,7 @@ X = zeros(model.Nx, Ne)
 
 for i = 1:Ne
     regenerate!(f0)
-    X[:, i] = f0.(xgrid) / 3 .+ 0.5#initial_condition(alpha_k, Δx, Nx)
+    X[:, i] = f0.(xgrid) / 3 .+ 0.5
 end
 
 # %%
@@ -192,9 +190,7 @@ Loc = Localization(xgrid, Lrad, metric, symm_kernel=true, is_sparse=true)
 make_figs && with_theme(my_theme) do
     fig = Figure()
     ax = Axis(fig[1, 1])
-    for i = 1:10
-        lines!(ax, xgrid, X[:, i])
-    end
+    foreach(i -> lines!(ax, xgrid, X[:, i]), 1:10)
     lines!(ax, xgrid, x0, linewidth=10)
     fig
 end
@@ -217,14 +213,12 @@ beta_GSBL = beta_range[hyperprior_idx] # shape parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
-ϑ_GSBL = 1e-6
-
 dist = GeneralizedGamma(r_GSBL, beta_GSBL, ϑ_GSBL);
 
 # %%
 # PA_offset = ceil(Int64, order_PA / 2)
 # Ns = Nx - 2 * PA_offset
-PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=Tuple(sys_burgers.mesh.md.x[[1, end]]))
+PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(-1., 1.))
 # @assert size(PA.P) == (Ns, Nx)
 
 S = LinearMaps.WrappedMap(PA.P)
@@ -322,6 +316,9 @@ jldopen(joinpath(data_path, "burgers_" * string(now()) * ".jld2"), "w") do file
         X_alg = Symbol("X_$alg")
         X_traj = @eval($X_alg)
         filter_group[string(X_alg)] = X_traj
+        if alg == "hlocenkf"
+            filter_group["θ_hlocenkf"] = θ_hlocenkf
+        end
 
         metric_sym = Symbol("metrics_$alg")
         metric_dict = @eval($metric_sym)
@@ -334,7 +331,7 @@ end;
 
 # %%
 make_figs && with_theme(my_theme) do
-    tsnap = length(X_hlocenkf) - 1 #10 # length(X_hlocenkf) ÷ 4
+    tsnap = 11 #length(X_hlocenkf) - 1
     t_val = data.tt[tsnap]
     x_tsnap = data_plot[:, tsnap]
     y_tsnap = data.yt[:, tsnap]
@@ -368,8 +365,8 @@ make_figs && with_theme(my_theme) do
     scatter!(ax_enkf, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
     axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
     display(fig)
-    # save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.png"), fig)
-    # save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.png"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.pdf"), fig)
 end
 
 # %%
