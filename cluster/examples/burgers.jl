@@ -27,12 +27,12 @@ make_figs = true
 # Problem setup params
 polydeg = 4 # Order in space
 Ncells = 75 # Number of DG cells
-delta_y = 50 # Spatial frequency of observation. Not regularly spaced
+delta_y = 25 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
 delta_t_obs = 0.05 # Amount of time between each observation
 
 sigma_x_data = 0. # Noise in the state dynamics (i.e., the PDE solution itself)
-sigma_y = 0.05 # Noise in the state observation (i.e., what the "sensors" record)
+sigma_y = 0.025 # Noise in the state observation (i.e., what the "sensors" record)
 
 t0, tf = 0.0, 1.0 # Start and end time
 
@@ -46,7 +46,7 @@ alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 
 # %%
 # GSBL Hyperparams
-order_PA = 3 # Poly annihilator order
+order_PA = 5 # Poly annihilator order
 Niter = 5
 theta_init = 1.
 hyperprior_idx = 3
@@ -136,7 +136,9 @@ mesh_wts = vec(sys_burgers.mesh.md.wJq)
 ents = [mesh_wts'Trixi.entropy.(x, (sys_burgers.equations,)) for x in eachcol(data.xt)]
 
 # %%
-make_figs && display(lines(ents; axis=(; limits=(0, nothing, 0, nothing))));
+make_figs && with_theme(my_theme) do
+    lines(ents; axis=(; limits=(0, nothing, 0, nothing)))
+end
 
 # %%
 x_plot, data_plot = get_plot_ensemble(data.xt, sys_burgers)
@@ -172,6 +174,15 @@ for i = 1:Ne
 end
 
 # %%
+make_figs && with_theme(my_theme) do
+    fig = Figure()
+    ax = Axis(fig[1, 1])
+    foreach(i -> lines!(ax, xgrid, X[:, i]), 1:10)
+    lines!(ax, xgrid, x0, linewidth=10)
+    fig
+end
+
+# %%
 Cϵ = LinearMap(ϵy.σ, Ny)
 sys_y = ObsSystem(H, Cϵ);
 
@@ -185,15 +196,6 @@ Loc = Localization(xgrid, Lrad, metric, symm_kernel=true, is_sparse=true)
 
 # beta_infl, sigma_x_filter = 1.04, 0.1
 ϵxbeta_filter = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
-
-# %%
-make_figs && with_theme(my_theme) do
-    fig = Figure()
-    ax = Axis(fig[1, 1])
-    foreach(i -> lines!(ax, xgrid, X[:, i]), 1:10)
-    lines!(ax, xgrid, x0, linewidth=10)
-    fig
-end
 
 # %%
 locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
@@ -285,6 +287,7 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
 end
+@info "" metrics_hlocenkf[:crps2_hlocenkf][] metrics_hlocenkf[:rmse2_hlocenkf][] metrics_locenkf[:crps2_locenkf][] metrics_locenkf[:rmse2_locenkf][]
 
 # %%
 jldopen(joinpath(data_path, "burgers_" * string(now()) * ".jld2"), "w") do file
@@ -331,7 +334,7 @@ end;
 
 # %%
 make_figs && with_theme(my_theme) do
-    tsnap = 11 #length(X_hlocenkf) - 1
+    tsnap = 10#length(X_hlocenkf) - 1
     t_val = data.tt[tsnap]
     x_tsnap = data_plot[:, tsnap]
     y_tsnap = data.yt[:, tsnap]
@@ -529,4 +532,36 @@ make_figs && with_theme(my_theme) do
     display(fig)
     save(joinpath(@__DIR__, "figs", "burgers", "entropy.pdf"), fig)
     save(joinpath(@__DIR__, "figs", "burgers", "entropy.png"), fig)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure(size=(1050, 500))
+    tv_locenkf = reduce(hcat, metrics_locenkf[:tv_norm]')'
+    tv_hlocenkf = reduce(hcat, metrics_hlocenkf[:tv_norm]')'
+    ylims = extrema(reduce(hcat, collect(extrema(x)) for x in [tv_locenkf, tv_hlocenkf]))
+    ax1 = Axis(fig[1, 1],
+        title="Burgers TV, EnKF",
+        aspect=1.,
+        xlabel=L"t",
+        ylabel="TV",
+        limits=(t0, tf, ylims...)
+    )
+    ax2 = Axis(fig[1, 2],
+        title="Burgers TV, GSBL-EnKF",
+        aspect=1.,
+        xlabel=L"t",
+        limits=(t0, tf, ylims...)
+    )
+    # lines!(ax1, data.tt, entropy_data, linewidth=3, label="TV of solution")
+    # lines!(ax2, data.tt, entropy_data, linewidth=3, label="TV of solution")
+    for ens_idx in 1:Ne
+        lines!(ax1, data.tt, tv_locenkf[2:end, ens_idx], linewidth=0.5)
+        lines!(ax2, data.tt, tv_hlocenkf[2:end, ens_idx], linewidth=0.5)
+    end
+    # axislegend(ax1)
+    # axislegend(ax2)
+    display(fig)
+    # save(joinpath(@__DIR__, "figs", "burgers", "tv.pdf"), fig)
+    # save(joinpath(@__DIR__, "figs", "burgers", "tv.png"), fig)
 end

@@ -45,7 +45,7 @@ sigma_y = 0.05
 # %%
 # Important parameters for data assimilation
 Ne = 50 # Ensemble size
-Lrad = 0.01 # Localization radius
+Lrad = 0.8delta_t_obs * advection_velocity # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0 = 0.8 # Parameter for initial condition

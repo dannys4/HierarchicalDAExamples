@@ -30,7 +30,7 @@ make_figs = true
 # ### Data generating parameters
 
 # %%
-polydeg = 3
+polydeg = 4
 Ncells = 50
 Nvar = 3
 
@@ -52,8 +52,9 @@ sigma_x_data = 0.0
 alpha_k_f0, L_f0 = 1.0, 10.0
 sigma_x_filter = 0.05
 beta_infl = 1.02
-Lrad = 0.1
-Ne = 50
+wave_speed = 13.912
+Lrad = wave_speed * delta_t_obs
+Ne = 100
 cfl = 0.9
 
 # %% [markdown]
@@ -279,8 +280,8 @@ Cϵ = LinearMap(ϵy.Σ, size(H, 1))
 sys_y = ObsSystem(H, Cϵ)
 
 # Create Localization structure
-metric = CartesianMetric(; Nvar)
-Loc = Localization(xgrid, Lrad, metric, symm_kernel=true, is_sparse=true)
+metric = CartesianMetric()
+Loc = Localization(xgrid, Lrad, metric; Nvar, symm_kernel=true, is_sparse=true)
 
 filter_inflation = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
@@ -297,6 +298,9 @@ end
 locenkf = LocEnKF(identity, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=false)
 
 # %%
+X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
+
+# %%
 local X_locenkf
 @info "Performing EnKF..."
 try
@@ -308,6 +312,7 @@ catch e
 end
 
 # %%
+order_PA = 6
 PA_skip = ceil(Int64, order_PA / 2)
 Nsvar = Nxvar - 2 * PA_skip
 Ns = Nvar * Nsvar
@@ -330,7 +335,7 @@ idxpθ_θgrid = 3 * ((1:length(θgrid)) .- 1) .+ 3
 # %%
 # Selection of hyper-prior parameters
 # power parameter
-hyperprior_idx = 1
+hyperprior_idx = 3
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
@@ -339,6 +344,8 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
+# ϑ_GSBL = 1e-4
+# r_GSBL, β_GSBL, ϑ_GSBL = -1, 1, 1e-2
 
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
@@ -367,6 +374,9 @@ end
 # %%
 local X_hlocenkf, θ_hlocenkf
 @info "Performing GSBL EnKF..."
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 10, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
+
+# %%
 try
     global X_hlocenkf, θ_hlocenkf
     X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
@@ -429,6 +439,8 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
 end
+@info "" mean(metrics_hlocenkf[:crps2_hlocenkf]) mean(metrics_hlocenkf[:rmse2_hlocenkf]) mean(metrics_locenkf[:crps2_locenkf]) mean(metrics_locenkf[:rmse2_locenkf])
+
 
 # %%
 jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do file
