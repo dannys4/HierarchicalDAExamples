@@ -25,31 +25,32 @@ make_figs = true
 
 # %%
 # Problem setup params
-polydeg = 4 # Order in space
-Ncells = 75 # Number of DG cells
-delta_y = 25 # Spatial frequency of observation. Not regularly spaced
+polydeg = 2 # Order in space
+Ncells = 100 # Number of DG cells
+delta_y = 20 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
 delta_t_obs = 0.05 # Amount of time between each observation
 
 sigma_x_data = 0. # Noise in the state dynamics (i.e., the PDE solution itself)
 sigma_y = 0.025 # Noise in the state observation (i.e., what the "sensors" record)
 
-t0, tf = 0.0, 1.0 # Start and end time
+t0, tf = 0.0, 2.0 # Start and end time
 
 # %%
 # Important parameters for data assimilation
 Ne = 40 # Ensemble size
-Lrad = delta_t_obs # Localization radius
+Lrad = 1.2delta_t_obs # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
 
 # %%
 # GSBL Hyperparams
-order_PA = 5 # Poly annihilator order
+order_PA = 3 # Poly annihilator order
 Niter = 5
 theta_init = 1.
-hyperprior_idx = 3
+hyperprior_idx = 2
+is_theta_shared = false
 
 # %%
 # Assign any given arguments
@@ -205,33 +206,30 @@ locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 X_locenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
-# Selection of hyper-prior parameters
-# power parameter
+# Selection of hyper-prior parameters power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
-beta_range = [1.001 + Ne / 2, 2.5918 + Ne / 2, 2.0165, 1.0017];
-beta_GSBL = beta_range[hyperprior_idx] # shape parameter
+β_shift = is_theta_shared ? Ne / 2 : 1 / 2
+β_range = [1.001 + β_shift, 2.5918 + β_shift, 2.0165, 1.0017];
+β_GSBL = β_range[hyperprior_idx] # shape parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
-dist = GeneralizedGamma(r_GSBL, beta_GSBL, ϑ_GSBL);
+
+dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
-# PA_offset = ceil(Int64, order_PA / 2)
-# Ns = Nx - 2 * PA_offset
 PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(-1., 1.))
-# @assert size(PA.P) == (Ns, Nx)
-
 S = LinearMaps.WrappedMap(PA.P)
 
 theta_init_vec = fill(theta_init, size(PA.P, 1))
+theta_init_space = is_theta_shared ? theta_init_vec : repeat(theta_init_vec, 1, Ne)
 Cθ = LinearMap(Diagonal(theta_init_vec))
-sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ);
+sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-# Niter, theta_init = 5, 1.
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter=10, θinit=theta_init)
 
 # %%
 @info "Performing GSBL EnKF..."
@@ -264,6 +262,7 @@ end
 
 # %%
 for alg_name in ["locenkf", "hlocenkf"]
+    start_idx = 1
     # Error metrics
     metric_sym = Symbol("metrics_$alg_name")
     metric_dict = @eval($metric_sym)
@@ -277,7 +276,7 @@ for alg_name in ["locenkf", "hlocenkf"]
         rel_norms = @eval($rel_norms_sym)
         for metric in [:rmse, :crps]
             metric_sym = Symbol(string(metric) * string(which_norm) * "_" * alg_name)
-            metric_dict[metric_sym] = [get_Lp(errs[j], rel_norms[j, :], metric) for j in 1:Nvar]
+            metric_dict[metric_sym] = [get_Lp(errs[j][start_idx:end], rel_norms[j, start_idx:end], metric) for j in 1:Nvar]
         end
     end
 
@@ -334,7 +333,7 @@ end;
 
 # %%
 make_figs && with_theme(my_theme) do
-    tsnap = 10#length(X_hlocenkf) - 1
+    tsnap = 5#length(X_hlocenkf) - 1
     t_val = data.tt[tsnap]
     x_tsnap = data_plot[:, tsnap]
     y_tsnap = data.yt[:, tsnap]
@@ -357,10 +356,11 @@ make_figs && with_theme(my_theme) do
 
     lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
     lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
-    scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5, color=cols[2])
     for j in 1:Ne
-        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
-        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
+        color = (cols[1+(j%length(cols))], 0.4)
+        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8; color)
+        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8; color)
+        scatter!(ax_theta, xgrid, theta_tsnap[:, j], label="θ", markersize=5; color)
     end
     lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
     scatter!(ax_gsbl, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)

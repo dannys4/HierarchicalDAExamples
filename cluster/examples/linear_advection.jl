@@ -25,9 +25,9 @@ make_figs = true
 
 # %%
 # PDE solution parameters
-polydeg = 2
+polydeg = 4
 advection_velocity = 0.1
-Ncells = 200
+Ncells = 100
 coordinates_min, coordinates_max = -1., 1.
 
 # %%
@@ -37,7 +37,7 @@ delta_t_dyn = 0.05
 delta_t_obs = 0.25
 t0, tf = 0.0, 10.0
 sigma_x_data = 0.
-sigma_y = 0.05
+sigma_y = 0.15
 
 # %% [markdown]
 # ### Parameters for Filtering
@@ -45,7 +45,7 @@ sigma_y = 0.05
 # %%
 # Important parameters for data assimilation
 Ne = 50 # Ensemble size
-Lrad = 0.8delta_t_obs * advection_velocity # Localization radius
+Lrad = delta_t_obs * advection_velocity # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0 = 0.8 # Parameter for initial condition
@@ -54,10 +54,11 @@ alpha_k_f0 = 0.8 # Parameter for initial condition
 # ### Parameters for GSBL
 
 # %%
-order_PA = 3
-hyperprior_idx = 3
+order_PA = 2
+hyperprior_idx = 2
 theta_init = 1.
-Niter = 2
+Niter = 3
+is_theta_shared = false
 
 # %%
 # Assign any given arguments
@@ -223,7 +224,8 @@ X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
-β_range = [1.001 + Ne / 2, 2.5918 + Ne / 2, 2.0165, 1.0017];
+β_shift = is_theta_shared ? Ne / 2 : 1 / 2
+β_range = [1.001 + β_shift, 2.5918 + β_shift, 2.0165, 1.0017];
 β_GSBL = β_range[hyperprior_idx] # shape parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
@@ -240,11 +242,12 @@ xgrid_S = xgrid
 
 # %%
 theta_init_vec = fill(theta_init, length(xgrid_S))
+theta_init_space = is_theta_shared ? theta_init_vec : repeat(theta_init_vec, 1, Ne)
 Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
 
 # %%
 @info "Performing GSBL EnKF..."
@@ -300,6 +303,7 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
 end
+@info "" metrics_locenkf[:crps2_locenkf][] metrics_hlocenkf[:crps2_hlocenkf][]
 
 # %%
 jldopen(joinpath(data_path, "advection_" * string(now()) * ".jld2"), "w") do file
@@ -382,10 +386,11 @@ make_figs && with_theme(my_theme) do
 
     lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
     lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
-    scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5, color=cols[2])
     for j in 1:Ne
-        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
-        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
+        col = (cols[1+(j%length(cols))], 0.4)
+        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8, color=col)
+        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8, color=col)
+        scatter!(ax_theta, xgrid, theta_tsnap[:, j], label="θ", markersize=5, color=col)
     end
     lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
     scatter!(ax_gsbl, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
