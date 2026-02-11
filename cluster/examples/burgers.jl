@@ -39,17 +39,19 @@ t0, tf = 0.0, 2.0 # Start and end time
 # %%
 # Important parameters for data assimilation
 Ne = 40 # Ensemble size
-Lrad = 1.2delta_t_obs # Localization radius
+Lrad = 1.2 * delta_t_obs # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
+initial_noise_perturb = 0.8
 
 # %%
 # GSBL Hyperparams
-order_PA = 3 # Poly annihilator order
-Niter = 5
+order_PA = 5 # Poly annihilator order
+Niter = 2
 theta_init = 1.
 hyperprior_idx = 2
+forecast_scale_gsbl = 3.0
 is_theta_shared = false
 
 # %%
@@ -166,12 +168,12 @@ end
 
 # %%
 # Define function class for the initial condition
-f0 = SmoothPeriodic(xgrid, alpha_k_f0; L=L_f0);
+f0 = SmoothPeriodic(xgrid, alpha_k_f0; L=L_f0)
 X = zeros(model.Nx, Ne)
 
 for i = 1:Ne
     regenerate!(f0)
-    X[:, i] = f0.(xgrid) / 3 .+ 0.5
+    X[:, i] = (1 - initial_noise_perturb) * x0 + initial_noise_perturb * (f0.(xgrid) / 3 .+ 0.5)
 end
 
 # %%
@@ -206,6 +208,7 @@ locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 X_locenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
+hyperprior_idx = 1
 # Selection of hyper-prior parameters power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
@@ -216,10 +219,11 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
-
+# ϑ_GSBL = 1e-2
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
+order_PA = 3
 PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(-1., 1.))
 S = LinearMaps.WrappedMap(PA.P)
 
@@ -229,7 +233,19 @@ Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter=10, θinit=theta_init)
+forecast_scale_gsbl = 5
+Lrad_gsbl = Lrad / 2
+Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true)
+
+# %%
+Niter = 2
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
+
+# %%
+# Create burnin
+# gsbl_burnin = 5
+# gsbl_T_partition = (gsbl_burnin, Tf - gsbl_burnin)
+# gsbl_algos = (locenkf, hlocenkf)
 
 # %%
 @info "Performing GSBL EnKF..."
@@ -247,7 +263,7 @@ begin
     get_errs = (X, metric, which_var) -> map(axes(data.xt, 2)) do t_idx
         CRPS(X[t_idx+1][which_var, :, :], @view(data_quad[which_var, :, t_idx]), metric, mesh_wts)
     end
-    get_Lp = (err, rel_norms, prop::Symbol) -> mean(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
+    get_Lp = (err, rel_norms, prop::Symbol) -> map(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
 
     entropy_state = u -> Trixi.entropy(prim2cons(u, equations), equations)
     entropy_ensemble = u_ens -> map(entropy_state, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
@@ -286,7 +302,26 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
 end
-@info "" metrics_hlocenkf[:crps2_hlocenkf][] metrics_hlocenkf[:rmse2_hlocenkf][] metrics_locenkf[:crps2_locenkf][] metrics_locenkf[:rmse2_locenkf][]
+@info "" mean(metrics_hlocenkf[:crps2_hlocenkf][]) mean(metrics_hlocenkf[:rmse2_hlocenkf][]) mean(metrics_locenkf[:crps2_locenkf][]) mean(metrics_locenkf[:rmse2_locenkf][])
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure(size=(500, 300))
+    lims = (nothing, nothing, 1e-2, 1e0)
+    ax = Axis(fig[1, 1], yscale=log10, limits=lims)
+    gsbl_crps = metrics_hlocenkf[:crps2_hlocenkf][]
+    gsbl_rmse = metrics_hlocenkf[:rmse2_hlocenkf][]
+    enkf_crps = metrics_locenkf[:crps2_locenkf][]
+    enkf_rmse = metrics_locenkf[:rmse2_locenkf][]
+    cols = Makie.wong_colors()
+    # vlines!([3, 5, 7], color=:black, label="Burn-in")
+    lines!(gsbl_crps, color=cols[1], linewidth=3, label="GSBL CRPS")
+    lines!(enkf_crps, color=cols[2], linewidth=3, label="EnKF CRPS")
+    lines!(gsbl_rmse, color=cols[1], linestyle=:dash, linewidth=3, label="GSBL RMSE")
+    lines!(enkf_rmse, color=cols[2], linestyle=:dash, linewidth=3, label="EnKF RMSE")
+    axislegend()
+    fig
+end
 
 # %%
 jldopen(joinpath(data_path, "burgers_" * string(now()) * ".jld2"), "w") do file
@@ -333,7 +368,7 @@ end;
 
 # %%
 make_figs && with_theme(my_theme) do
-    tsnap = 5#length(X_hlocenkf) - 1
+    tsnap = 7
     t_val = data.tt[tsnap]
     x_tsnap = data_plot[:, tsnap]
     y_tsnap = data.yt[:, tsnap]
@@ -345,7 +380,7 @@ make_figs && with_theme(my_theme) do
     _, X_gsbl_tsnap = get_plot_ensemble(X_hlocenkf[tsnap+1], sys_burgers)
     X_gsbl_tsnap = X_gsbl_tsnap[:, 1, :]
     X_hlocenkf_tsnap = vec(mean(X_gsbl_tsnap; dims=2))
-    theta_tsnap = θ_hlocenkf[tsnap+1]
+    # theta_tsnap = θ_hlocenkf[tsnap+1]
     cols = Makie.wong_colors()
 
     fig = Figure(size=(750, 550))
@@ -356,11 +391,12 @@ make_figs && with_theme(my_theme) do
 
     lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
     lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
+    is_theta_shared && scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5)
     for j in 1:Ne
         color = (cols[1+(j%length(cols))], 0.4)
         lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8; color)
         lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8; color)
-        scatter!(ax_theta, xgrid, theta_tsnap[:, j], label="θ", markersize=5; color)
+        # is_theta_shared || scatter!(ax_theta, xgrid, theta_tsnap[:, j], label="θ", markersize=5; color)
     end
     lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
     scatter!(ax_gsbl, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
@@ -374,7 +410,7 @@ end
 
 # %%
 make_figs && with_theme(my_theme) do
-    tsnap = length(X_locenkf) - 1
+    tsnap = 5#length(X_locenkf) - 1
     x_tsnap = data.xt[:, tsnap]
     X_locenkf_tsnap = vec(mean(X_locenkf[tsnap+1]; dims=2))
     X_ens_tsnap = [X_locenkf[tsnap+1][:, j] for j in 1:Ne]

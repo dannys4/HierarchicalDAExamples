@@ -25,26 +25,26 @@ make_figs = true
 
 # %%
 # PDE solution parameters
-polydeg = 4
+polydeg = 2
 advection_velocity = 0.1
 Ncells = 100
 coordinates_min, coordinates_max = -1., 1.
 
 # %%
 # Data generation setup
-delta_y = 20
+delta_y = 10
 delta_t_dyn = 0.05
-delta_t_obs = 0.25
-t0, tf = 0.0, 10.0
+delta_t_obs = 0.5
+t0, tf = 0.0, 20.0
 sigma_x_data = 0.
-sigma_y = 0.15
+sigma_y = 0.1
 
 # %% [markdown]
 # ### Parameters for Filtering
 
 # %%
 # Important parameters for data assimilation
-Ne = 50 # Ensemble size
+Ne = 75 # Ensemble size
 Lrad = delta_t_obs * advection_velocity # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
@@ -57,7 +57,7 @@ alpha_k_f0 = 0.8 # Parameter for initial condition
 order_PA = 2
 hyperprior_idx = 2
 theta_init = 1.
-Niter = 3
+Niter = 2
 is_theta_shared = false
 
 # %%
@@ -180,6 +180,10 @@ u0 = sawtooth_fcn.(xgrid, (0,), (advection_velocity,))
 data = generate_data_trixi(model, u0, Tf, sys_advection; (true_soln!)=soln!)
 
 # %%
+x_plot, data_plot = get_plot_ensemble(data.xt, sys_advection)
+data_plot = data_plot[:, 1, :]
+
+# %%
 make_figs && with_theme(my_theme) do
     fig = Figure()
     ax = Axis(fig[1, 1])
@@ -220,6 +224,7 @@ locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
 # %%
+hyperprior_idx = 1
 # Selection of hyper-prior parameters power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
@@ -236,6 +241,7 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
+order_PA = 3
 PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(coordinates_min, coordinates_max))
 S = LinearMaps.LinearMap(PA.P)
 xgrid_S = xgrid
@@ -247,7 +253,12 @@ Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
+forecast_scale_gsbl = 5
+Lrad_gsbl = 4 * Lrad
+Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true)
+
+# %%
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
 
 # %%
 @info "Performing GSBL EnKF..."
@@ -265,7 +276,7 @@ begin
     get_errs = (X, metric, which_var) -> map(axes(data.xt, 2)) do t_idx
         CRPS(X[t_idx+1][which_var, :, :], @view(data_quad[which_var, :, t_idx]), metric, mesh_wts)
     end
-    get_Lp = (err, rel_norms, prop::Symbol) -> mean(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
+    get_Lp = (err, rel_norms, prop::Symbol) -> map(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
 
     entropy_state = u -> Trixi.entropy(prim2cons(u, equations), equations)
     entropy_ensemble = u_ens -> map(entropy_state, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
@@ -303,7 +314,25 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
 end
-@info "" metrics_locenkf[:crps2_locenkf][] metrics_hlocenkf[:crps2_hlocenkf][]
+@info "" mean(metrics_hlocenkf[:crps2_hlocenkf][]) mean(metrics_hlocenkf[:rmse2_hlocenkf][]) mean(metrics_locenkf[:crps2_locenkf][]) mean(metrics_locenkf[:rmse2_locenkf][])
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure(size=(500, 300))
+    lims = (nothing, nothing, 1e-2, 1e0)
+    ax = Axis(fig[1, 1], yscale=log10, limits=lims)
+    gsbl_crps = metrics_hlocenkf[:crps2_hlocenkf][]
+    gsbl_rmse = metrics_hlocenkf[:rmse2_hlocenkf][]
+    enkf_crps = metrics_locenkf[:crps2_locenkf][]
+    enkf_rmse = metrics_locenkf[:rmse2_locenkf][]
+    cols = Makie.wong_colors()
+    lines!(gsbl_crps, color=cols[1], linewidth=3, label="GSBL CRPS")
+    lines!(enkf_crps, color=cols[2], linewidth=3, label="EnKF CRPS")
+    lines!(gsbl_rmse, color=cols[1], linestyle=:dash, linewidth=3, label="GSBL RMSE")
+    lines!(enkf_rmse, color=cols[2], linestyle=:dash, linewidth=3, label="EnKF RMSE")
+    axislegend()
+    fig
+end
 
 # %%
 jldopen(joinpath(data_path, "advection_" * string(now()) * ".jld2"), "w") do file
@@ -347,22 +376,6 @@ end;
 
 # %%
 make_figs && with_theme(my_theme) do
-    xt = data.xt[:, 9]
-    fig = Figure()
-    ax = Axis(fig[1, 1])
-    lines!(xgrid, xt, linewidth=3, label="True state")
-    sp = 10 * PA.P * xt
-    lines!(xgrid_S, sp, linewidth=3, label="PA application")
-    axislegend()
-    display(fig)
-end
-
-# %%
-x_plot, data_plot = get_plot_ensemble(data.xt, sys_advection)
-data_plot = data_plot[:, 1, :]
-
-# %%
-make_figs && with_theme(my_theme) do
     tsnap = length(X_hlocenkf) - 1
     t_val = data.tt[tsnap]
     x_tsnap = data_plot[:, tsnap]
@@ -401,6 +414,18 @@ make_figs && with_theme(my_theme) do
     save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.png"), fig)
     save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.pdf"), fig)
 end
+
+# %%
+# make_figs && with_theme(my_theme) do
+#     xt = data.xt[:, 9]
+#     fig = Figure()
+#     ax = Axis(fig[1, 1])
+#     lines!(xgrid, xt, linewidth=3, label="True state")
+#     sp = 10 * PA.P * xt
+#     lines!(xgrid_S, sp, linewidth=3, label="PA application")
+#     axislegend()
+#     display(fig)
+# end
 
 # %%
 make_figs && with_theme(my_theme) do
