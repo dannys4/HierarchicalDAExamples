@@ -54,7 +54,7 @@ initial_noise_perturb = 0.075
 sigma_x_filter = 0.05
 beta_infl = 1.02
 wave_speed = 13.912
-Lrad = wave_speed * delta_t_obs
+Lrad = 4 * wave_speed * delta_t_obs
 Ne = 50
 cfl = 0.2
 
@@ -283,11 +283,10 @@ if use_linear_initial
 else
     min_grid, max_grid = extrema(sys_euler.mesh.md.VX)
     from_solver = ode_transforms.from_solver_transform
-    to_solver = ode_transforms.to_solver_transform
-    levels_L = [27 / 7, 4sqrt(35) / 9, 31 / 3]
-    levels_R = [1 + 0.2sin(5 * max_grid), 0.5, 1.0]
+    levels_L = from_solver([27 / 7, 4sqrt(35) / 9, 31 / 3])
+    levels_R = from_solver([1 + 0.2sin(5 * max_grid), 0.5, 1.0])
     f0 = HierarchicalDA.SmoothSigmoid(
-        min_grid, max_grid, levels_L, levels_R
+        min_grid, max_grid, levels_L, levels_R; shift_mean = 0.25
     )
 end
 X0 = nothing
@@ -317,10 +316,6 @@ if use_positivity_transform
             HierarchicalDA.regenerate!(f0)
             X0_idx = @view X0[:, ens_idx]
             f0(X0_idx, xgrid)
-            for grid_idx in 1:Nxvar
-                X0_grid_idxs = (Nvar * (grid_idx - 1) + 1):(Nvar * grid_idx)
-                X0_idx[X0_grid_idxs] .= ode_transforms.from_solver_transform(X0_idx[X0_grid_idxs])
-            end
         end
     end
 else
@@ -416,7 +411,7 @@ end
 # @assert size(PA.P) == (Ns, Nx)
 # S = LinearMaps.LinearMap(PA.P)
 # θgrid = xgrid[PA_skip+1:end-PA_skip];
-diff_map = DGMultiDiff1D(sys_euler, false)
+diff_map = DGMultiDiff1D(sys_euler, true)
 grid_sz = sys_euler.mesh.md.J[1]
 diff_mat = sparse(diff_map * diff_map)
 S = LinearMap(diff_mat)
@@ -426,10 +421,11 @@ Ns = size(S, 1)
 # %%
 false && make_figs && with_theme(my_theme) do
     fig = Figure(size=(900, 300))
+    f_x = S * vec(reduce(vcat, sin.(xgrid * pi / 5)' for _ in 1:3))
     for start_idx in 1:3
         ax = Axis(fig[1, start_idx])
-        lines!(rep_grid[start_idx:3:end], d2_sin[start_idx:3:end], linewidth=3)
-        lines!(rep_grid[start_idx:3:end], -sin.(rep_grid[start_idx:3:end] * pi / 5) * ((pi / 5)^2), linestyle=:dash, linewidth=3)
+        lines!(xgrid, f_x[start_idx:3:end], linewidth=3)
+        lines!(xgrid, -sin.(xgrid * pi / 5) * ((pi / 5)^2), linestyle=:dash, linewidth=3)
     end
     display(fig)
 end
@@ -458,7 +454,7 @@ beta_shift = is_theta_shared ? Ne : 1
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
-ϑ_GSBL = 1e-2
+ϑ_GSBL = 1e-6
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
@@ -475,11 +471,11 @@ else
 end
 
 # %%
-forecast_scale_gsbl = 1
-Lrad_gsbl = 0.5Lrad
-Niter = 10
+forecast_scale_gsbl = 10
+Lrad_gsbl = Lrad
+Niter = 5
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y)
-Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl; Nvar, symm_kernel=true, is_sparse=true)
+Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl; Nvar, is_sparse=true)
 hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isiterative, isfiltered=false, cg_tol=1e-3)
 
 # %%
@@ -502,6 +498,7 @@ end
 
 # %%
 make_figs && with_theme(my_theme) do
+    show_theta = false
     postproc_locenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_locenkf)
     postproc_hlocenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_hlocenkf)
     tsnap = length(X_hlocenkf) - 1#minimum(length.([X_hlocenkf, X_locenkf]) .- 1)
@@ -522,12 +519,14 @@ make_figs && with_theme(my_theme) do
         for j in 1:Ne
             col = (cols[mod1(j, length(cols))], 0.2)
             lines!(ax1, x_plot, postproc_locenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=col)
-            lines!(ax2, x_plot, postproc_hlocenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=col)
-            # is_theta_shared || scatter!(ax2, θgrid, θ_hlocenkf[tsnap+1][plot_idx_θ, j], color=col, markersize=3)
+            if tsnap < length(postproc_hlocenkf)
+                lines!(ax2, x_plot, postproc_hlocenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=col)
+            end
+            show_theta && (is_theta_shared || scatter!(ax2, θgrid, θ_hlocenkf[tsnap+1][plot_idx_θ, j], color=col, markersize=3))
         end
         scatter!(ax1, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
         scatter!(ax2, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
-        is_theta_shared && scatter!(ax2, θgrid, θ_hlocenkf[tsnap+1][plot_idx_θ], label="θ")
+        show_theta && is_theta_shared && scatter!(ax2, θgrid, θ_hlocenkf[tsnap+1][plot_idx_θ], label="θ")
         axislegend(ax1, position=:lc)
         axislegend(ax2, position=:lc)
         save(joinpath(@__DIR__, "figs", "euler", "compare_$(which_var)_t$(tsnap).pdf"))
