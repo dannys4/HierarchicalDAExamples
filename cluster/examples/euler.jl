@@ -40,7 +40,7 @@ delta_t_obs = 0.01
 t0 = 0.0
 tf = 1.0
 
-delta_y = 20
+delta_y = 15
 density_thresh, pressure_thresh = 5e-6, 5e-6
 sigma_y = 0.1
 sigma_x_data = 0.0
@@ -56,7 +56,7 @@ beta_infl = 1.02
 wave_speed = 13.912
 Lrad = wave_speed * delta_t_obs
 Ne = 50
-cfl = 0.9
+cfl = 0.2
 
 # %% [markdown]
 # ### GSBL parameters
@@ -123,7 +123,7 @@ Nxvar = (polydeg + 1) * Ncells
 Nx = Nvar * Nxvar
 
 # Define Trixi system for inviscid Burgers equation
-sys_euler = setup_euler(polydeg, Ncells);
+sys_euler = setup_euler(polydeg, Ncells)
 
 xgrid = GridFromMesh(sys_euler)
 ygrid = xgrid[1:delta_y:end]
@@ -142,6 +142,25 @@ idxvy_ygrid = 3 * ((1:length(ygrid)) .- 1) .+ 2
 idxpy_ygrid = 3 * ((1:length(ygrid)) .- 1) .+ 3
 
 # %%
+pos_vars = ["rho", "p"]
+pos_var_flags = collect(in.(Trixi.varnames(cons2prim, equations), (pos_vars,)))
+
+to_solver_transforms = tuple([identity, exp][pos_var_flags .+ 1]...)
+from_solver_transforms = tuple([identity, log][pos_var_flags .+ 1]...)
+use_positivity_transform = true
+if use_positivity_transform
+    ode_transforms = (;
+        to_solver_transform = x->SVector(ntuple(i->to_solver_transforms[i](x[i]), 3)),
+        from_solver_transform = x->SVector(ntuple(i->from_solver_transforms[i](x[i]), 3))
+    )
+else
+    ode_transforms = (;
+        to_solver_transform = identity,
+        from_solver_transform = identity
+    )
+end
+
+# %%
 Tf = round(Int, (tf - t0) / delta_t_obs)
 π0 = MvNormal(zeros(Nx), Matrix(1.0 * I, Nx, Nx))
 
@@ -155,6 +174,7 @@ Ny = length(all_idxy)
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y);
 h(x, t) = x[all_idxy]
 H = SelectionMap(all_idxy, :out, in_size=Nx) # LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[all_idxy, :]))
+# H = sparse(I(Nx)[all_idxy,:])
 F = StateSpace(x -> x, h)
 model = Model(Nx, Ny, delta_t_dyn, delta_t_obs, ϵx_true, ϵy, π0, 0, 0, 0, F);
 
@@ -162,19 +182,21 @@ model = Model(Nx, Ny, delta_t_dyn, delta_t_obs, ϵx_true, ϵy, π0, 0, 0, 0, F);
 # Gives me initial condition in cons
 x0_quad = map(x -> initial_condition_shu_osher(x, 0., sys_euler.equations), sys_euler.mesh.md.xq)
 # x0 is in prims
-x0 = sol2vec(x0_quad, sys_euler.equations)# + 0.01*f0(xgrid);
+x0 = sol2vec(x0_quad, sys_euler.equations; g=(x,eqns)->ode_transforms.from_solver_transform(cons2prim(x, eqns)))
 
 # %%
 thresholds = (density_thresh, pressure_thresh)
 variables = (Trixi.density, Trixi.pressure)
-stage_limiter! = PositivityPreservingLimiterZhangShu(thresholds=thresholds,
-    variables=variables)
+stage_limiter! = PositivityPreservingLimiterZhangShu(
+    thresholds=thresholds,
+    variables=variables
+)
 ode_solver = SSPRK43(stage_limiter!)
 # ode_solver = SSPRK43()
 
 # %%
 @info "Generating data..."
-data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, cfl=0.2)
+data = generate_data_trixi(deepcopy(model), deepcopy(x0), Tf, deepcopy(sys_euler); ode_solver, ode_transforms, cfl)
 
 # %%
 make_figs && with_theme(my_theme) do
@@ -202,7 +224,7 @@ make_figs && with_theme(my_theme) do
 end;
 
 # %%
-x_plot, data_plot = get_plot_ensemble(data.xt, sys_euler)
+x_plot, data_plot = get_plot_ensemble(data.xt, sys_euler; ode_transforms)
 
 # %%
 false && make_figs && with_theme(my_theme) do
@@ -229,7 +251,7 @@ false && make_figs && with_theme(my_theme) do
         end
         save(joinpath(@__DIR__, "figs", "euler", "solution.mp4"), anim)
         display(anim)
-    end;
+    end
 
 
 # %%
@@ -238,10 +260,8 @@ make_figs && with_theme(my_theme) do
     for (i, idx_y) in enumerate([idxρy_ygrid, idxvy_ygrid, idxpy_ygrid])
         axi = Axis(fig[1, i])
         lines!(axi, x_plot, data_plot[:, i, 1], linewidth=3)
-        lines!(axi, x_plot, data_plot[:, i, 1], linewidth=3)
         lines!(axi, x_plot, data_plot[:, i, div(end, 3)], linewidth=3)
         if i in [1, 2, 3]
-            # i -= 1
             scatter!(axi, ygrid, data.yt[idx_y, 1], markersize=18)
             errorbars!(axi, ygrid, data.yt[idx_y, 1], fill(2sigma_y, length(idx_y)))
             scatter!(axi, ygrid, data.yt[idx_y, div(end, 3)], markersize=18)
@@ -253,37 +273,84 @@ make_figs && with_theme(my_theme) do
 end;
 
 # %%
-initial_noise_perturb = 0.05
-alpha_k_f0 = 1.0
-pos_vars = ["rho", "p", "v1"]
-pos_var_flags = in.(Trixi.varnames(cons2cons, equations), (pos_vars,))
+use_linear_initial = false
+f0 = nothing
+if use_linear_initial
+    initial_noise_perturb = 0.1
+    alpha_k_f0 = 1.0
+    # Define function class for the initial condition
+    f0 = SmoothPeriodic(xgrid, alpha_k_f0; L=L_f0, Nvar=Nvar, is_dirichlet=true)
+else
+    min_grid, max_grid = extrema(sys_euler.mesh.md.VX)
+    from_solver = ode_transforms.from_solver_transform
+    to_solver = ode_transforms.to_solver_transform
+    levels_L = [27 / 7, 4sqrt(35) / 9, 31 / 3]
+    levels_R = [1 + 0.2sin(5 * max_grid), 0.5, 1.0]
+    f0 = HierarchicalDA.SmoothSigmoid(
+        min_grid, max_grid, levels_L, levels_R
+    )
+end
+X0 = nothing
+if use_positivity_transform
+    if use_linear_initial
+        min_grid, max_grid = extrema(sys_euler.mesh.md.VX)
+        from_solver = ode_transforms.from_solver_transform
+        to_solver = ode_transforms.to_solver_transform
+        levels_L = @SVector[27 / 7, 4sqrt(35) / 9, 31 / 3]
+        levels_R = @SVector[1 + 0.2sin(5 * max_grid), 0.5, 1.0]
+        normalized_coords = (xgrid .- min_grid) / (max_grid - min_grid)
+        lin_X0 = reduce(hcat, collect(to_solver((1 - x) * from_solver(levels_L) + x * from_solver(levels_R))) for x in normalized_coords)
+        X0 = Array{Float64}(undef, Nvar, Nxvar, Ne)
+        for ens_idx in axes(X0, 3)
+            X0_idx = @view X0[:,:,ens_idx]
+            noise_idx = reshape(f0(xgrid), :, Nvar)'
+            noise_idx .*= initial_noise_perturb
+            for grid_idx in axes(X0_idx, 2)
+                X0_idx[:, grid_idx] .= ode_transforms.from_solver_transform(lin_X0[:, grid_idx] + noise_idx[:, grid_idx])
+            end
+            regenerate!(f0)
+        end
+        X0 = reshape(X0, :, Ne)
+    else
+        X0 = Array{Float64}(undef, Nx, Ne)
+        for ens_idx in axes(X0, 2)
+            HierarchicalDA.regenerate!(f0)
+            X0_idx = @view X0[:, ens_idx]
+            f0(X0_idx, xgrid)
+            for grid_idx in 1:Nxvar
+                X0_grid_idxs = (Nvar * (grid_idx - 1) + 1):(Nvar * grid_idx)
+                X0_idx[X0_grid_idxs] .= ode_transforms.from_solver_transform(X0_idx[X0_grid_idxs])
+            end
+        end
+    end
+else
+    function initial_ensemble(x, t, eq::CompressibleEulerEquations1D; levels_L=nothing, levels_R=nothing, xmin=-5, xmax=5)
+        isnothing(levels_L) && (levels_L = @SVector[27 / 7, 4sqrt(35) / 9, 31 / 3])
+        isnothing(levels_R) && (levels_R = @SVector[1 + 0.2sin(5 * xmax), 0.5, 1.0])
+        prims = levels_L + ((x - xmin) / (xmax - xmin)) * (levels_R - levels_L)
+        return Vector(prim2cons(prims, eq))
+    end
 
-# Define function class for the initial condition
-f0 = SmoothPeriodic(xgrid, alpha_k_f0; L=L_f0 / 2, Nvar=Nvar, is_dirichlet=true)
-
-function initial_ensemble(x, t, eq::CompressibleEulerEquations1D; levels_L=nothing, levels_R=nothing, xmin=-5, xmax=5)
-    isnothing(levels_L) && (levels_L = @SVector[27 / 7, 4sqrt(35) / 9, 31 / 3])
-    isnothing(levels_R) && (levels_R = @SVector[1 + 0.2sin(5 * xmax), 0.5, 1.0])
-    return Vector(prim2cons(levels_L + ((x - xmin) / (xmax - xmin)) * (levels_R - levels_L), eq))
+    X0, _ = positivity_preserving_noise1d(f0, initial_ensemble, Ne, sys_euler, pos_vars, initial_noise_perturb)
 end
 
-X0, _ = positivity_preserving_noise1d(f0, initial_ensemble, Ne, sys_euler, pos_vars, initial_noise_perturb)
-
 # %%
-indicator_sc = IndicatorHennemannGassner(
-    equations,
-    sys_euler.dg.basis,
-    alpha_max=0.5,
-    alpha_min=0.001,
-    alpha_smooth=true,
-    variable=density_pressure,
-)
-u_x = x0; #data.xt[:, 1]
-u = vec2sol(u_x, sys_euler)
-cache = Trixi.create_cache(sys_euler.mesh, equations, sys_euler.dg.volume_integral, sys_euler.dg, Float64, Float64)
+false && make_figs && with_theme(my_theme) do
+    indicator_sc = IndicatorHennemannGassner(
+        equations,
+        sys_euler.dg.basis,
+        alpha_max=0.5,
+        alpha_min=0.001,
+        alpha_smooth=true,
+        variable=density_pressure,
+    )
+    u_x = x0; #data.xt[:, 1]
+    u = vec2sol(u_x, sys_euler)
+    cache = Trixi.create_cache(sys_euler.mesh, equations, sys_euler.dg.volume_integral, sys_euler.dg, Float64, Float64)
 
-alpha = indicator_sc(u, sys_euler.mesh, equations, sys_euler.dg, cache)
-scatter(alpha)
+    alpha = indicator_sc(u, sys_euler.mesh, equations, sys_euler.dg, cache)
+    scatter(alpha)
+end
 
 # %%
 make_figs && with_theme(my_theme) do
@@ -312,21 +379,22 @@ metric = CartesianMetric(Float64)
 Loc = Localization(xgrid, Lrad, metric; Nvar, symm_kernel=true, is_sparse=true)
 
 sigma_x_filter = 0.01
+beta_infl = 1.02
 filter_inflation = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
-function filtering_fcn!(x)
-    pressure = @view x[idxp]
-    density = @view x[idxρ]
-    pressure .= max.(pressure, (1e-6,))
-    density .= max.(density, (1e-6,))
-    nothing
-end
+# function filtering_fcn!(x)
+#     pressure = @view x[idxp]
+#     density = @view x[idxρ]
+#     pressure .= max.(pressure, (1e-6,))
+#     density .= max.(density, (1e-6,))
+#     nothing
+# end
 
-locenkf = LocEnKF(identity, ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=false)
+locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=false)
 
 # %%
-X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
+X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, ode_transforms, cfl)
 
 # %%
 local X_locenkf
@@ -340,21 +408,37 @@ catch e
 end
 
 # %%
-order_PA = 3
-PA_skip = ceil(Int64, order_PA / 2)
-Nsvar = Nxvar - 2 * PA_skip
-Ns = Nvar * Nsvar
+# order_PA = 3
+# PA_skip = ceil(Int64, order_PA / 2)
+# Nsvar = Nxvar - 2 * PA_skip
+# Ns = Nvar * Nsvar
+# PA = PolyAnnil(xgrid, order_PA; Nvar=Nvar, istruncated=true)
+# @assert size(PA.P) == (Ns, Nx)
+# S = LinearMaps.LinearMap(PA.P)
+# θgrid = xgrid[PA_skip+1:end-PA_skip];
+diff_map = DGMultiDiff1D(sys_euler, false)
+grid_sz = sys_euler.mesh.md.J[1]
+diff_mat = sparse(diff_map * diff_map)
+S = LinearMap(diff_mat)
+θgrid = copy(xgrid)
+Ns = size(S, 1)
 
-PA = PolyAnnil(xgrid, order_PA; Nvar=Nvar, istruncated=true)
+# %%
+false && make_figs && with_theme(my_theme) do
+    fig = Figure(size=(900, 300))
+    for start_idx in 1:3
+        ax = Axis(fig[1, start_idx])
+        lines!(rep_grid[start_idx:3:end], d2_sin[start_idx:3:end], linewidth=3)
+        lines!(rep_grid[start_idx:3:end], -sin.(rep_grid[start_idx:3:end] * pi / 5) * ((pi / 5)^2), linestyle=:dash, linewidth=3)
+    end
+    display(fig)
+end
 
-@assert size(PA.P) == (Ns, Nx)
 
-S = LinearMaps.LinearMap(PA.P)
-θgrid = xgrid[PA_skip+1:end-PA_skip];
-
-idxρθ_xgrid = 3 * ((PA_skip+1:length(xgrid)-PA_skip) .- 1) .+ 1
-idxvθ_xgrid = 3 * ((PA_skip+1:length(xgrid)-PA_skip) .- 1) .+ 2
-idxpθ_xgrid = 3 * ((PA_skip+1:length(xgrid)-PA_skip) .- 1) .+ 3
+# %%
+idxρθ_xgrid = 3 * ((1:length(xgrid)) .- 1) .+ 1
+idxvθ_xgrid = 3 * ((1:length(xgrid)) .- 1) .+ 2
+idxpθ_xgrid = 3 * ((1:length(xgrid)) .- 1) .+ 3
 
 idxρθ_θgrid = 3 * ((1:length(θgrid)) .- 1) .+ 1
 idxvθ_θgrid = 3 * ((1:length(θgrid)) .- 1) .+ 2
@@ -362,7 +446,7 @@ idxpθ_θgrid = 3 * ((1:length(θgrid)) .- 1) .+ 3
 
 # %%
 # Selection of hyper-prior parameters
-hyperprior_idx = 1
+hyperprior_idx = 4
 # power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
@@ -373,8 +457,8 @@ beta_shift = is_theta_shared ? Ne : 1
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
-# ϑ_GSBL = 0.1
 
+ϑ_GSBL = 1e-2
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
@@ -387,21 +471,25 @@ if isiterative
     CX_init = LocalizedEmpiricalCov(X0, Loc; with_matrix=false)
     sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ, CX_init; cache_matrix=false, isiterative=true)
 else
-    sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
+    sys_ys = ObsConstraintSystem(LinearMap(H), S, Cθ, Cϵ)
 end
 
 # %%
-forecast_scale_gsbl = 1.
-theta_init = 1.
-Niter = 3
+forecast_scale_gsbl = 1
+Lrad_gsbl = 0.5Lrad
+Niter = 10
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y)
-Loc_gsbl = Localization(xgrid, Lrad, metric, forecast_scale_gsbl; Nvar, symm_kernel=true, is_sparse=true)
+Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl; Nvar, symm_kernel=true, is_sparse=true)
 hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isiterative, isfiltered=false, cg_tol=1e-3)
 
 # %%
 local X_hlocenkf, θ_hlocenkf
 @info "Performing GSBL EnKF..."
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
+T_hlocenkf = 3
+start_hlocenkf = time()
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl, ode_transforms)
+hloc_elaps = time() - start_hlocenkf
+@info "GSBL EnKF Took $(hloc_elaps)s"
 
 # %%
 false && try
@@ -410,6 +498,63 @@ false && try
 catch e
     global X_hlocenkf, θ_hlocenkf
     @warn "GSBL localized EnKF failed for Shu-Osher, $(typeof(e))"
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    postproc_locenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_locenkf)
+    postproc_hlocenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_hlocenkf)
+    tsnap = length(X_hlocenkf) - 1#minimum(length.([X_hlocenkf, X_locenkf]) .- 1)
+    all_idxs = Dict(
+        :ρ => (1, idxρ, idxρy_ygrid, idxρθ_θgrid),
+        :v => (2, idxv, idxvy_ygrid, idxvθ_θgrid),
+        :p => (3, idxp, idxpy_ygrid, idxpθ_θgrid),
+    )
+    for which_var in ["ρ", "v", "p"]
+        fig = Figure(size=(1010, 500))
+        ax1 = Axis(fig[1, 1], title="EnKF $(which_var)")
+        ax2 = Axis(fig[1, 2], title="GSBL-EnKF $(which_var)")
+        var_idx, plot_idx, plot_idx_y, plot_idx_θ = all_idxs[Symbol(which_var)]
+        lines!(ax1, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
+        lines!(ax2, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
+
+        cols = Makie.wong_colors()
+        for j in 1:Ne
+            col = (cols[mod1(j, length(cols))], 0.2)
+            lines!(ax1, x_plot, postproc_locenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=col)
+            lines!(ax2, x_plot, postproc_hlocenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=col)
+            # is_theta_shared || scatter!(ax2, θgrid, θ_hlocenkf[tsnap+1][plot_idx_θ, j], color=col, markersize=3)
+        end
+        scatter!(ax1, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
+        scatter!(ax2, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
+        is_theta_shared && scatter!(ax2, θgrid, θ_hlocenkf[tsnap+1][plot_idx_θ], label="θ")
+        axislegend(ax1, position=:lc)
+        axislegend(ax2, position=:lc)
+        save(joinpath(@__DIR__, "figs", "euler", "compare_$(which_var)_t$(tsnap).pdf"))
+        display(fig)
+    end
+    @info "Plotted!"
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    for idx_start in 1:3
+        fig = Figure()
+        ax = Axis(fig[1,1])
+        t_snap = length(X_hlocenkf)
+        snap_hlocenkf = @view X_hlocenkf[t_snap][idx_start:Nvar:end,:]
+        snap_locenkf = @view X_locenkf[t_snap][idx_start:Nvar:end,:]
+        for (j,(X_gsbl_j, X_enkf_j)) in enumerate(zip(eachcol.((snap_hlocenkf, snap_locenkf))...))
+            lab1, lab2 = j == 1 ? ("GSBL", "EnKF") : (nothing, nothing)
+            lines!(xgrid, X_gsbl_j, color=(:black, 0.5), label=lab1)
+            lines!(xgrid, X_enkf_j, color=(:red, 0.5), label=lab2)
+        end
+        data_snap = data.xt[idx_start:Nvar:end, t_snap - 1]
+        lines!(xgrid, data_snap, label="Truth", linewidth=3,)
+        axislegend()
+        display(fig)
+    end
+    @info "Plotted on quad"
 end
 
 # %%
@@ -510,41 +655,6 @@ jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do fil
         end
     end
 end;
-
-# %%
-make_figs && with_theme(my_theme) do
-    postproc_locenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_locenkf)
-    postproc_hlocenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_hlocenkf)
-    tsnap = length(X_hlocenkf) - 1#minimum(length.([X_hlocenkf, X_locenkf]) .- 1)
-    all_idxs = Dict(
-        :ρ => (1, idxρ, idxρy_ygrid, idxρθ_θgrid),
-        :v => (2, idxv, idxvy_ygrid, idxvθ_θgrid),
-        :p => (3, idxp, idxpy_ygrid, idxpθ_θgrid),
-    )
-    for which_var in ["ρ", "v", "p"]
-        fig = Figure(size=(1010, 500))
-        ax1 = Axis(fig[1, 1], title="EnKF $(which_var)")
-        ax2 = Axis(fig[1, 2], title="GSBL-EnKF $(which_var)")
-        var_idx, plot_idx, plot_idx_y, plot_idx_θ = all_idxs[Symbol(which_var)]
-        lines!(ax1, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
-        lines!(ax2, xgrid, data.xt[plot_idx, tsnap], linewidth=3, label="Truth")
-
-        cols = Makie.wong_colors()
-        for j in 1:Ne
-            col = (cols[mod1(j, length(cols))], 0.2)
-            lines!(ax1, x_plot, postproc_locenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "Loc-EnKF", nothing), color=col)
-            lines!(ax2, x_plot, postproc_hlocenkf[tsnap+1][:, var_idx, j], linewidth=0.8, label=ifelse(j == 1, "GSBL-EnKF", nothing), color=col)
-            is_theta_shared || scatter!(ax2, θgrid, θ_hlocenkf[tsnap+1][plot_idx_θ, j], color=col, markersize=3)
-        end
-        scatter!(ax1, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
-        scatter!(ax2, ygrid, data.yt[plot_idx_y, tsnap], markersize=18, label="Observations")
-        is_theta_shared && scatter!(ax2, θgrid, θ_hlocenkf[tsnap+1][plot_idx_θ], label="θ")
-        axislegend(ax1, position=:lc)
-        axislegend(ax2, position=:lc)
-        save(joinpath(@__DIR__, "figs", "euler", "compare_$(which_var)_t$(tsnap).pdf"))
-        display(fig)
-    end
-end
 
 # %%
 make_figs && with_theme(my_theme) do

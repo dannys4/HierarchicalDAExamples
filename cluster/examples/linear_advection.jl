@@ -37,7 +37,7 @@ delta_t_dyn = 0.05
 delta_t_obs = 0.5
 t0, tf = 0.0, 20.0
 sigma_x_data = 0.
-sigma_y = 0.1
+sigma_y = 0.05
 
 # %% [markdown]
 # ### Parameters for Filtering
@@ -112,11 +112,12 @@ Random.seed!(random_seed);
 
 # %%
 # Set up functions for the PDE, initial condition and entropy setup
-function sawtooth_fcn(x, t, α;
-    a=-1, b=1, N_saw=4, u_a=0.0, u_b=1.0)
-    time_norm_x = x[] - α[] * t[]
-    norm_x = (time_norm_x - a) / (b - a)
-    unit_x = norm_x - floor(norm_x)
+function sawtooth_fcn(
+    x, t, α;
+    a=-1, b=1, N_saw=4, u_a=0.0, u_b=1.0
+)
+    time_norm_x = (((x[] - a) - α[] * t[]) / (b - a)) % 1
+    unit_x = time_norm_x < 0 ? 1 + time_norm_x : time_norm_x
     which_seg = unit_x * N_saw
     per_x = (which_seg - floor(which_seg))
     u_a + per_x * (u_b - u_a)
@@ -161,13 +162,19 @@ xgrid = vec(mesh.md.xq);
 
 # %%
 Nx = length(xgrid)
-Ny = ceil(Int64, Nx / delta_y)
 Tf = Int((tf - t0) / delta_t_obs)
 π0 = MvNormal(zeros(Nx), Matrix(1.0 * I, Nx, Nx))
 
 # %%
-h(x, t) = x[1:delta_y:end]
-H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[1:delta_y:end, :]))
+sparse_obs = 1:delta_y:Nx
+# OPTIONAL: Put cluster of points near zero
+# dens_obs_frac = 1 / 20
+# center_region = round(Int, Nx*(0.5 - dens_obs_frac)) : (delta_y ÷ 3) : round(Int, Nx*(0.5 + dens_obs_frac))
+# obs_indices = sort(unique(vcat(sparse_obs, center_region)))
+obs_indices = sparse_obs
+Ny = length(obs_indices)
+h(x, t) = x[obs_indices]
+H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[obs_indices, :]))
 F = StateSpace(x -> x, h)
 sys_advection = TrixiSystem(equations, solver, mesh, semi)
 ϵx_data = AdditiveInflation(Nx, zeros(Nx), sigma_x_data)
@@ -188,10 +195,11 @@ make_figs && with_theme(my_theme) do
     fig = Figure()
     ax = Axis(fig[1, 1])
 
-    lines!(ax, xgrid, data.xt[:, 1])
-    lines!(ax, xgrid, data.xt[:, end])
-    scatter!(ax, xgrid[1:delta_y:end], data.yt[:, end])
-
+    lines!(ax, xgrid, data.xt[:, 1], label=L"u(t_0, x)")
+    lines!(ax, xgrid, data.xt[:, end], label=L"u(t_T,x)")
+    scatter!(ax, xgrid[obs_indices], data.yt[:, end], label=L"y_T")
+    # vlines!(ax, xgrid[center_region[[1,end]]], color=:black, label="Dens obs region")
+    axislegend()
     fig
 end
 
@@ -204,9 +212,6 @@ for i = 1:Ne
 end
 
 # %%
-Nx = length(xgrid)
-yidx = 1:delta_y:Nx
-
 # Create Localization structure
 # Gxx(i, j) = periodicmetric!(i, j, Nx)
 metric = PeriodicMetric(round.(extrema(xgrid))...)
@@ -224,7 +229,8 @@ locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
 # %%
-hyperprior_idx = 1
+is_theta_shared = false
+hyperprior_idx = 4
 # Selection of hyper-prior parameters power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
@@ -237,13 +243,16 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
 # r_GSBL, β_GSBL, ϑ_GSBL = 1., 30., 1e-3
-# ϑ_GSBL = 1e-3
+ϑ_GSBL = 1e-6
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
-order_PA = 3
-PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(coordinates_min, coordinates_max))
-S = LinearMaps.LinearMap(PA.P)
+# order_PA = 1
+# PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(coordinates_min, coordinates_max))
+# S = LinearMap(PA.P * PA.P)
+diff_map = DGMultiDiff1D(sys_advection, false)
+diff_mat = sparse(diff_map)
+S = LinearMap(diff_mat * diff_mat)
 xgrid_S = xgrid
 
 # %%
@@ -253,16 +262,67 @@ Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-forecast_scale_gsbl = 5
-Lrad_gsbl = 4 * Lrad
+forecast_scale_gsbl = 10
+Lrad_gsbl = Lrad
+# Loc_gsbl = ShockLocalization(PA.P, xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true, is_periodic=true, thresh=0.75)
 Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true)
 
 # %%
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
+Niter = 20
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter=Niter, θinit=theta_init)
 
 # %%
+beta_infl_hlocenkf = beta_infl
+ϵxβ_hlocenkf = MultiAddInflation(Nx, beta_infl_hlocenkf, zeros(Nx), sigma_x_filter)
+
 @info "Performing GSBL EnKF..."
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 10, ϵxβ_hlocenkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+
+# %%
+make_figs && with_theme(my_theme) do
+    tsnap = length(X_hlocenkf) - 1
+    t_val = data.tt[tsnap]
+    x_tsnap = data_plot[:, tsnap]
+    y_tsnap = data.yt[:, tsnap]
+
+    _, X_enkf_tsnap = get_plot_ensemble(X_locenkf[tsnap+1], sys_advection)
+    X_enkf_tsnap = X_enkf_tsnap[:, 1, :]
+    X_locenkf_tsnap = vec(mean(X_enkf_tsnap; dims=2))
+
+    _, X_gsbl_tsnap = get_plot_ensemble(X_hlocenkf[tsnap+1], sys_advection)
+    X_gsbl_tsnap = X_gsbl_tsnap[:, 1, :]
+    X_hlocenkf_tsnap = vec(mean(X_gsbl_tsnap; dims=2))
+    theta_tsnap = θ_hlocenkf[tsnap+1]
+    cols = Makie.wong_colors()
+
+    fig = Figure(size=(750, 550))
+    ax_enkf = Axis(fig[1, 1], title="EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_gsbl = Axis(fig[2, 1], title="GSBL-EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_theta = Axis(fig[3, 1], ylabel=L"\theta", aspect=10, xlabel=L"x")
+    linkxaxes!(ax_enkf, ax_gsbl, ax_theta)
+
+    lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
+    lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
+    if is_theta_shared
+        scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5)
+    end
+    for j in 1:Ne
+        col = (cols[1+(j%length(cols))], 0.4)
+        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=2.0, color=col)
+        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=2.0, color=col)
+        if !is_theta_shared
+            scatter!(ax_theta, xgrid, theta_tsnap[:, j], label="θ", markersize=5, color=col)
+        end
+    end
+    lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_gsbl, xgrid[obs_indices], y_tsnap, label="Observation", color=:black)
+    lines!(ax_enkf, x_plot, X_locenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_enkf, xgrid[obs_indices], y_tsnap, label="Observation", color=:black)
+    axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.png"), fig)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.pdf"), fig)
+end
 
 # %%
 begin
@@ -375,47 +435,6 @@ jldopen(joinpath(data_path, "advection_" * string(now()) * ".jld2"), "w") do fil
 end;
 
 # %%
-make_figs && with_theme(my_theme) do
-    tsnap = length(X_hlocenkf) - 1
-    t_val = data.tt[tsnap]
-    x_tsnap = data_plot[:, tsnap]
-    y_tsnap = data.yt[:, tsnap]
-
-    _, X_enkf_tsnap = get_plot_ensemble(X_locenkf[tsnap+1], sys_advection)
-    X_enkf_tsnap = X_enkf_tsnap[:, 1, :]
-    X_locenkf_tsnap = vec(mean(X_enkf_tsnap; dims=2))
-
-    _, X_gsbl_tsnap = get_plot_ensemble(X_hlocenkf[tsnap+1], sys_advection)
-    X_gsbl_tsnap = X_gsbl_tsnap[:, 1, :]
-    X_hlocenkf_tsnap = vec(mean(X_gsbl_tsnap; dims=2))
-    theta_tsnap = θ_hlocenkf[tsnap+1]
-    cols = Makie.wong_colors()
-
-    fig = Figure(size=(750, 550))
-    ax_enkf = Axis(fig[1, 1], title="EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
-    ax_gsbl = Axis(fig[2, 1], title="GSBL-EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
-    ax_theta = Axis(fig[3, 1], ylabel=L"\theta", aspect=10, xlabel=L"x")
-    linkxaxes!(ax_enkf, ax_gsbl, ax_theta)
-
-    lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
-    lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
-    for j in 1:Ne
-        col = (cols[1+(j%length(cols))], 0.4)
-        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8, color=col)
-        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8, color=col)
-        scatter!(ax_theta, xgrid, theta_tsnap[:, j], label="θ", markersize=5, color=col)
-    end
-    lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
-    scatter!(ax_gsbl, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
-    lines!(ax_enkf, x_plot, X_locenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
-    scatter!(ax_enkf, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
-    axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
-    display(fig)
-    save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.png"), fig)
-    save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.pdf"), fig)
-end
-
-# %%
 # make_figs && with_theme(my_theme) do
 #     xt = data.xt[:, 9]
 #     fig = Figure()
@@ -450,7 +469,7 @@ make_figs && with_theme(my_theme) do
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.4))
     end
-    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
+    scatter!(ax1, xgrid[obs_indices], y_tsnap)
 
     axislegend(ax1)
 
@@ -477,7 +496,7 @@ make_figs && with_theme(my_theme) do
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
     end
-    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
+    scatter!(ax1, xgrid[obs_indices], y_tsnap)
     axislegend(ax1)
     framerate = 10
     timestamps = range(t_start, Tf, step=1)
@@ -506,7 +525,7 @@ make_figs && with_theme(my_theme) do
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
     end
-    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
+    scatter!(ax1, xgrid[obs_indices], y_tsnap)
     axislegend(ax1)
     framerate = 10
     timestamps = range(t_start, Tf, step=1)

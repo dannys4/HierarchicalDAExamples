@@ -27,12 +27,12 @@ make_figs = true
 # Problem setup params
 polydeg = 2 # Order in space
 Ncells = 100 # Number of DG cells
-delta_y = 20 # Spatial frequency of observation. Not regularly spaced
+delta_y = 15 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
-delta_t_obs = 0.05 # Amount of time between each observation
+delta_t_obs = 0.025 # Amount of time between each observation
 
 sigma_x_data = 0. # Noise in the state dynamics (i.e., the PDE solution itself)
-sigma_y = 0.025 # Noise in the state observation (i.e., what the "sensors" record)
+sigma_y = 0.05 # Noise in the state observation (i.e., what the "sensors" record)
 
 t0, tf = 0.0, 2.0 # Start and end time
 
@@ -208,7 +208,7 @@ locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 X_locenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
-hyperprior_idx = 1
+hyperprior_idx = 4
 # Selection of hyper-prior parameters power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
@@ -219,37 +219,79 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
-# ϑ_GSBL = 1e-2
+
+ϑ_GSBL = 5e-2
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
-order_PA = 3
-PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(-1., 1.))
-S = LinearMaps.WrappedMap(PA.P)
+# order_PA = 2
+# PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(-1., 1.))
+# S = LinearMaps.WrappedMap(PA.P * PA.P)
+diff_map = DGMultiDiff1D(sys_burgers, false)
+diff_mat = sparse(diff_map)
+S = LinearMap(diff_mat * diff_mat)
 
-theta_init_vec = fill(theta_init, size(PA.P, 1))
+theta_init_vec = fill(theta_init, size(S, 1))
 theta_init_space = is_theta_shared ? theta_init_vec : repeat(theta_init_vec, 1, Ne)
 Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-forecast_scale_gsbl = 5
-Lrad_gsbl = Lrad / 2
+forecast_scale_gsbl = 40
+Lrad_gsbl = 0.5Lrad
 Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true)
 
 # %%
-Niter = 2
+Niter = 20
 hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
 
 # %%
-# Create burnin
-# gsbl_burnin = 5
-# gsbl_T_partition = (gsbl_burnin, Tf - gsbl_burnin)
-# gsbl_algos = (locenkf, hlocenkf)
+@info "Performing GSBL EnKF..."
+T_hlocenkf = Tf # or Tf
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, ϵxbeta_filter, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
-@info "Performing GSBL EnKF..."
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
+make_figs && with_theme(my_theme) do
+    tsnap = 40
+    t_val = data.tt[tsnap]
+    x_tsnap = data_plot[:, tsnap]
+    y_tsnap = data.yt[:, tsnap]
+
+    _, X_enkf_tsnap = get_plot_ensemble(X_locenkf[tsnap+1], sys_burgers)
+    X_enkf_tsnap = X_enkf_tsnap[:, 1, :]
+    X_locenkf_tsnap = vec(mean(X_enkf_tsnap; dims=2))
+
+    _, X_gsbl_tsnap = get_plot_ensemble(X_hlocenkf[tsnap+1], sys_burgers)
+    X_gsbl_tsnap = X_gsbl_tsnap[:, 1, :]
+    X_hlocenkf_tsnap = vec(mean(X_gsbl_tsnap; dims=2))
+    theta_tsnap = θ_hlocenkf[tsnap+1]
+    cols = Makie.wong_colors()
+
+    fig = Figure(size=(750, 550))
+    ax_enkf = Axis(fig[1, 1], title="EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_gsbl = Axis(fig[2, 1], title="GSBL-EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_theta = Axis(fig[3, 1], ylabel=L"\theta", aspect=10, xlabel=L"x")
+    linkxaxes!(ax_enkf, ax_gsbl, ax_theta)
+
+    lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
+    lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
+    is_theta_shared && scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5)
+    for j in 1:Ne
+        color = (cols[1+(j%length(cols))], 0.4)
+        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8; color)
+        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8; color)
+        is_theta_shared || scatter!(ax_theta, xgrid, theta_tsnap[:, j], label="θ", markersize=5; color)
+    end
+    lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_gsbl, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
+    lines!(ax_enkf, x_plot, X_locenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_enkf, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
+    axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
+    Label(fig[0,1], "Time $t_val", tellwidth=false)
+    display(fig)
+    # save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.png"), fig)
+    # save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.pdf"), fig)
+end
 
 # %%
 begin
@@ -365,48 +407,6 @@ jldopen(joinpath(data_path, "burgers_" * string(now()) * ".jld2"), "w") do file
         end
     end
 end;
-
-# %%
-make_figs && with_theme(my_theme) do
-    tsnap = 7
-    t_val = data.tt[tsnap]
-    x_tsnap = data_plot[:, tsnap]
-    y_tsnap = data.yt[:, tsnap]
-
-    _, X_enkf_tsnap = get_plot_ensemble(X_locenkf[tsnap+1], sys_burgers)
-    X_enkf_tsnap = X_enkf_tsnap[:, 1, :]
-    X_locenkf_tsnap = vec(mean(X_enkf_tsnap; dims=2))
-
-    _, X_gsbl_tsnap = get_plot_ensemble(X_hlocenkf[tsnap+1], sys_burgers)
-    X_gsbl_tsnap = X_gsbl_tsnap[:, 1, :]
-    X_hlocenkf_tsnap = vec(mean(X_gsbl_tsnap; dims=2))
-    # theta_tsnap = θ_hlocenkf[tsnap+1]
-    cols = Makie.wong_colors()
-
-    fig = Figure(size=(750, 550))
-    ax_enkf = Axis(fig[1, 1], title="EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
-    ax_gsbl = Axis(fig[2, 1], title="GSBL-EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
-    ax_theta = Axis(fig[3, 1], ylabel=L"\theta", aspect=10, xlabel=L"x")
-    linkxaxes!(ax_enkf, ax_gsbl, ax_theta)
-
-    lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
-    lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
-    is_theta_shared && scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5)
-    for j in 1:Ne
-        color = (cols[1+(j%length(cols))], 0.4)
-        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8; color)
-        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8; color)
-        # is_theta_shared || scatter!(ax_theta, xgrid, theta_tsnap[:, j], label="θ", markersize=5; color)
-    end
-    lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
-    scatter!(ax_gsbl, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
-    lines!(ax_enkf, x_plot, X_locenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
-    scatter!(ax_enkf, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
-    axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
-    display(fig)
-    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.png"), fig)
-    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.pdf"), fig)
-end
 
 # %%
 make_figs && with_theme(my_theme) do
