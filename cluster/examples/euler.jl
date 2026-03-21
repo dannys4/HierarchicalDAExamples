@@ -40,9 +40,9 @@ delta_t_obs = 0.01
 t0 = 0.0
 tf = 1.0
 
-delta_y = 15
-density_thresh, pressure_thresh = 5e-6, 5e-6
-sigma_y = 0.1
+delta_y = 10
+density_thresh, pressure_thresh = 5e-5, 5e-5
+sigma_y = 0.05
 sigma_x_data = 0.0
 
 # %% [markdown]
@@ -65,7 +65,7 @@ cfl = 0.2
 order_PA = 3
 hyperprior_idx = 1
 forecast_scale_gsbl = 3.0
-theta_init = 1e-8
+theta_init = 1.0
 Niter = 2
 is_theta_shared = false
 
@@ -126,16 +126,17 @@ Nx = Nvar * Nxvar
 sys_euler = setup_euler(polydeg, Ncells)
 
 xgrid = GridFromMesh(sys_euler)
-ygrid = xgrid[1:delta_y:end]
+y_obs_idx = (delta_y ÷ 2):delta_y:length(xgrid)
+ygrid = xgrid[y_obs_idx]
 
 # %%
 idxρ = 3 * ((1:length(xgrid)) .- 1) .+ 1
 idxv = 3 * ((1:length(xgrid)) .- 1) .+ 2
 idxp = 3 * ((1:length(xgrid)) .- 1) .+ 3
 
-idxρy_xgrid = idxρ[1:delta_y:end]
-idxvy_xgrid = idxv[1:delta_y:end]
-idxpy_xgrid = idxp[1:delta_y:end]
+idxρy_xgrid = idxρ[y_obs_idx]
+idxvy_xgrid = idxv[y_obs_idx]
+idxpy_xgrid = idxp[y_obs_idx]
 
 idxρy_ygrid = 3 * ((1:length(ygrid)) .- 1) .+ 1
 idxvy_ygrid = 3 * ((1:length(ygrid)) .- 1) .+ 2
@@ -373,8 +374,6 @@ sys_y = ObsSystem(H, Cϵ)
 metric = CartesianMetric(Float64)
 Loc = Localization(xgrid, Lrad, metric; Nvar, symm_kernel=true, is_sparse=true)
 
-sigma_x_filter = 0.01
-beta_infl = 1.02
 filter_inflation = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
@@ -403,6 +402,8 @@ catch e
 end
 
 # %%
+
+# %%
 # order_PA = 3
 # PA_skip = ceil(Int64, order_PA / 2)
 # Nsvar = Nxvar - 2 * PA_skip
@@ -411,12 +412,15 @@ end
 # @assert size(PA.P) == (Ns, Nx)
 # S = LinearMaps.LinearMap(PA.P)
 # θgrid = xgrid[PA_skip+1:end-PA_skip];
-diff_map = DGMultiDiff1D(sys_euler, true)
+sqrt_quad_wts = kron(sqrt.(vec(sys_euler.mesh.md.wJq)), ones(Nvar))
+diff_map = DGMultiDiff1D(sys_euler, false)
 grid_sz = sys_euler.mesh.md.J[1]
-diff_mat = sparse(diff_map * diff_map)
-S = LinearMap(diff_mat)
-θgrid = copy(xgrid)
-Ns = size(S, 1)
+diff_mat = Diagonal(sqrt_quad_wts) * Matrix(diff_map * diff_map)
+edge_cutoff = 10
+S_out_idx = (Nvar * (edge_cutoff+1)):(Nvar * ((size(diff_mat, 1) ÷ Nvar)- edge_cutoff))
+S = LinearMap(diff_mat[S_out_idx,:])
+θgrid = copy(xgrid[(edge_cutoff + 1) : (end-edge_cutoff)])
+Ns = size(S,1)
 
 # %%
 false && make_figs && with_theme(my_theme) do
@@ -454,7 +458,7 @@ beta_shift = is_theta_shared ? Ne : 1
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
-ϑ_GSBL = 1e-6
+ϑ_GSBL = 1e-4
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
@@ -471,17 +475,17 @@ else
 end
 
 # %%
-forecast_scale_gsbl = 10
+forecast_scale_gsbl = 1
 Lrad_gsbl = Lrad
-Niter = 5
+Niter = 1
 ϵy = AdditiveInflation(Ny, zeros(Ny), sigma_y)
-Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl; Nvar, is_sparse=true)
+Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl; Nvar, symm_kernel=true, is_sparse=true)
 hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isiterative, isfiltered=false, cg_tol=1e-3)
 
 # %%
 local X_hlocenkf, θ_hlocenkf
 @info "Performing GSBL EnKF..."
-T_hlocenkf = 3
+T_hlocenkf = Tf
 start_hlocenkf = time()
 X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl, ode_transforms)
 hloc_elaps = time() - start_hlocenkf
@@ -537,6 +541,7 @@ end
 
 # %%
 make_figs && with_theme(my_theme) do
+    show_theta = true
     for idx_start in 1:3
         fig = Figure()
         ax = Axis(fig[1,1])
@@ -547,6 +552,9 @@ make_figs && with_theme(my_theme) do
             lab1, lab2 = j == 1 ? ("GSBL", "EnKF") : (nothing, nothing)
             lines!(xgrid, X_gsbl_j, color=(:black, 0.5), label=lab1)
             lines!(xgrid, X_enkf_j, color=(:red, 0.5), label=lab2)
+            thetas = θ_hlocenkf[t_snap][idx_start:3:end, j]
+            thetas /= (2*maximum(thetas))
+            show_theta && (is_theta_shared || scatter!(θgrid, thetas, markersize=5))
         end
         data_snap = data.xt[idx_start:Nvar:end, t_snap - 1]
         lines!(xgrid, data_snap, label="Truth", linewidth=3,)
@@ -563,7 +571,7 @@ begin
     mesh_wts = vec(sys_euler.mesh.md.wJq)
     rel_norms1 = sum(j -> mesh_wts[j] * abs.(data_quad[:, j, :]), eachindex(mesh_wts))
     rel_norms2 = sqrt.(sum(j -> mesh_wts[j] * abs2.(data_quad[:, j, :]), eachindex(mesh_wts)))
-    get_errs = (X, metric, which_var) -> map(axes(data.xt, 2)) do t_idx
+    get_errs = (X, metric, which_var, start_time) -> map(start_time:size(data.xt,2)) do t_idx
         CRPS(X[t_idx+1][which_var, :, :], @view(data_quad[which_var, :, t_idx]), metric, mesh_wts)
     end
     get_Lp = (err, rel_norms, prop::Symbol) -> mean(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
@@ -583,6 +591,24 @@ begin
 end
 
 # %%
+function derivative_rmse(diff_op, Nvar, quad_wts, truth, ens)
+    diff_truth = collect(diff_op * truth)
+    diff_ens = collect(diff_op * ens)
+    mse = zeros(Nvar)
+    truth_norm = zeros(Nvar)
+    for (idx, wt) in enumerate(quad_wts)
+        for var_idx in 1:Nvar
+            pt_idx = (idx - 1)*Nvar + var_idx
+            discrep = abs2.(diff_ens[pt_idx,:] .- diff_truth[pt_idx])
+            mse[var_idx] += mean(discrep)*wt
+            truth_norm[var_idx] += abs2(diff_truth[pt_idx])*wt
+        end
+    end
+    sqrt.(mse ./ truth_norm)
+end
+
+# %%
+start_time = 10
 for alg_name in ["locenkf", "hlocenkf"]
     # Error metrics
     metric_sym = Symbol("metrics_$alg_name")
@@ -593,7 +619,7 @@ for alg_name in ["locenkf", "hlocenkf"]
     isnothing(X_traj) && continue
     for which_norm in [1, 2]
         norm = Symbol("norm$which_norm")
-        errs = [get_errs(X_traj, norm, j) for j in 1:Nvar]
+        errs = [get_errs(X_traj, norm, j, start_time) for j in 1:Nvar]
         rel_norms_sym = Symbol("rel_norms$which_norm")
         rel_norms = @eval($rel_norms_sym)
         for metric in [:rmse, :crps]
@@ -610,7 +636,7 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
 end
-@info "" mean(metrics_hlocenkf[:crps2_hlocenkf]) mean(metrics_hlocenkf[:rmse2_hlocenkf]) mean(metrics_locenkf[:crps2_locenkf]) mean(metrics_locenkf[:rmse2_locenkf])
+@info "" tuple(metrics_hlocenkf[:crps2_hlocenkf]) tuple(metrics_hlocenkf[:rmse2_hlocenkf]) tuple(metrics_locenkf[:crps2_locenkf]) tuple(metrics_locenkf[:rmse2_locenkf])
 
 # %%
 jldopen(joinpath(data_path, "shu_osher_" * string(now()) * ".jld2"), "w") do file
