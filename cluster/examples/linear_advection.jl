@@ -243,7 +243,7 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
 # r_GSBL, β_GSBL, ϑ_GSBL = 1., 30., 1e-3
-ϑ_GSBL = 1e-6
+ϑ_GSBL = 1e-7
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
@@ -252,7 +252,8 @@ dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 # S = LinearMap(PA.P * PA.P)
 diff_map = DGMultiDiff1D(sys_advection, false)
 diff_mat = sparse(diff_map)
-S = LinearMap(diff_mat * diff_mat)
+sqrt_quad_wts = sqrt.(vec(sys_advection.mesh.md.wJq))
+S = LinearMap(Matrix(Diagonal(sqrt_quad_wts) * diff_mat * diff_mat))
 xgrid_S = xgrid
 
 # %%
@@ -262,8 +263,8 @@ Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-forecast_scale_gsbl = 10
-Lrad_gsbl = Lrad
+forecast_scale_gsbl = 20
+Lrad_gsbl = 0.5Lrad
 # Loc_gsbl = ShockLocalization(PA.P, xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true, is_periodic=true, thresh=0.75)
 Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true)
 
