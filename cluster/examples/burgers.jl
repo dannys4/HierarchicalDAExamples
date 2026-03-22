@@ -445,7 +445,7 @@ make_figs && with_theme(my_theme) do
     ys = @lift(ut(($tsnap) * delta_t_obs))
     X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
     X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
-    theta_tsnap = @lift(θ_hlocenkf[$tsnap+1])
+    theta_tsnap = [@lift(θ_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
     cols = Makie.wong_colors()
 
     fig = Figure()
@@ -454,9 +454,9 @@ make_figs && with_theme(my_theme) do
 
     lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
     lines!(ax1, xgrid, ys, linewidth=3, label="State")
-    lines!(ax1, xgrid, theta_tsnap, linewidth=3, label="θ")
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+        lines!(ax1, xgrid, theta_tsnap[j], linewidth=3)
     end
     scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
 
@@ -598,6 +598,6 @@ make_figs && with_theme(my_theme) do
     # axislegend(ax1)
     # axislegend(ax2)
     display(fig)
-    # save(joinpath(@__DIR__, "figs", "burgers", "tv.pdf"), fig)
-    # save(joinpath(@__DIR__, "figs", "burgers", "tv.png"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "tv.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "tv.png"), fig)
 end

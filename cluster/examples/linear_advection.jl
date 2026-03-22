@@ -83,7 +83,7 @@ end
 
 # %%
 using Pkg
-Pkg.activate(proj_path)
+# Pkg.activate(proj_path)
 @info "Activated project"
 
 # %%
@@ -269,7 +269,7 @@ Lrad_gsbl = 0.5Lrad
 Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true)
 
 # %%
-Niter = 20
+Niter = 10
 hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter=Niter, θinit=theta_init)
 
 # %%
@@ -277,7 +277,8 @@ beta_infl_hlocenkf = beta_infl
 ϵxβ_hlocenkf = MultiAddInflation(Nx, beta_infl_hlocenkf, zeros(Nx), sigma_x_filter)
 
 @info "Performing GSBL EnKF..."
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, 10, ϵxβ_hlocenkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+T_hlocenkf = Tf
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, ϵxβ_hlocenkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
 # %%
 make_figs && with_theme(my_theme) do
@@ -453,7 +454,7 @@ make_figs && with_theme(my_theme) do
     x_tsnap = data.xt[:, tsnap]
     X_hlocenkf_tsnap = vec(mean(X_hlocenkf[tsnap+1]; dims=2))
     X_ens_tsnap = [X_hlocenkf[tsnap+1][:, j] for j in 1:Ne]
-    theta_tsnap = θhist[tsnap+1]
+    theta_tsnap = θ_hlocenkf[tsnap+1]
     theta_tsnap *= 0.1 / maximum(theta_tsnap)
     y_tsnap = data.yt[:, tsnap]
     cols = Makie.wong_colors()
@@ -466,9 +467,9 @@ make_figs && with_theme(my_theme) do
     lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
     lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
     # lines!(ax1, xgrid, ys, linewidth=3, label="State")
-    scatter!(ax1, xgrid_S, theta_tsnap, label="θ", markersize=5)
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.4))
+        scatter!(ax1, xgrid_S, theta_tsnap[:,j], label="θ", markersize=5)
     end
     scatter!(ax1, xgrid[obs_indices], y_tsnap)
 
@@ -487,15 +488,15 @@ make_figs && with_theme(my_theme) do
     y_tsnap = @lift(data.yt[:, $tsnap])
     X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
     X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
-    theta_tsnap = @lift(θhist[$tsnap+1])
+    theta_tsnap = [@lift(θ_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
     fig = Figure()
     ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
 
-    lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
+    # lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
     lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
-    scatter!(ax1, xgrid_S, theta_tsnap, label="θ")
     for j in 1:Ne
-        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.3))
+        scatter!(ax1, xgrid_S, theta_tsnap[j])
     end
     scatter!(ax1, xgrid[obs_indices], y_tsnap)
     axislegend(ax1)
@@ -516,15 +517,15 @@ make_figs && with_theme(my_theme) do
     tsnap = Observable(t_start)
     x_tsnap = @lift(data.xt[:, $tsnap])
     y_tsnap = @lift(data.yt[:, $tsnap])
-    X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
+    # X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
     X_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
     fig = Figure()
     ax1 = Axis(fig[1, 1], title="Localized EnKF")
 
-    lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="LocEnKF")
+    # lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="LocEnKF")
     lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
     for j in 1:Ne
-        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.3))
     end
     scatter!(ax1, xgrid[obs_indices], y_tsnap)
     axislegend(ax1)
