@@ -92,7 +92,7 @@ end
 
 # %%
 using Pkg
-Pkg.activate(proj_path)
+# Pkg.activate(proj_path)
 
 # %%
 begin # Execute all loads as part of one expr
@@ -575,10 +575,11 @@ begin
         CRPS(X[t_idx+1][which_var, :, :], @view(data_quad[which_var, :, t_idx]), metric, mesh_wts)
     end
     get_Lp = (err, rel_norms, prop::Symbol) -> mean(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
-    density_state = u -> Trixi.density(prim2cons(u, equations), equations)
+    # g=(x,eqns)->ode_transforms.from_solver_transform(cons2prim(x, eqns))
+    density_state = u -> Trixi.density(prim2cons(ode_transforms.to_solver_transform(u), equations), equations)
     mass_ensemble = u_ens -> map(density_state, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
 
-    entropy_state = u -> Trixi.entropy(prim2cons(u, equations), equations)
+    entropy_state = u -> Trixi.entropy(prim2cons(ode_transforms.to_solver_transform(u), equations), equations)
     entropy_ensemble = u_ens -> map(entropy_state, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
 
     TV_norm_state = u -> sum(abs, diff(u))
@@ -608,7 +609,7 @@ function derivative_rmse(diff_op, Nvar, quad_wts, truth, ens)
 end
 
 # %%
-start_time = 10
+start_time = 5
 for alg_name in ["locenkf", "hlocenkf"]
     # Error metrics
     metric_sym = Symbol("metrics_$alg_name")
@@ -704,10 +705,18 @@ make_figs && with_theme(my_theme) do
     locenkf_vs = [@lift(locenkf_v_t($time, j)) for j in 1:Nens_plot]
 
     px_size = 600
-    fig = Figure(size=(3px_size, px_size))
-    for (j, vv) in enumerate([("ρ", ρs, locenkf_ρs), ("v", vs, locenkf_vs), ("p", ps, locenkf_ps),])
+    which_plot = ["ρ", "p"]
+    which_axis = 0
+    fig = Figure(size=(length(which_plot)*px_size, px_size))
+    for (j, vv) in enumerate([
+        ("ρ", ρs, locenkf_ρs),
+        ("v", vs, locenkf_vs),
+        ("p", ps, locenkf_ps),
+    ])
         which_var, truth, locenkf = vv
-        ax = Axis(fig[1, j], xlabel=L"x", title=which_var, aspect=1.)
+        in(which_var, which_plot) || continue
+        which_axis += 1
+        ax = Axis(fig[1, which_axis], xlabel=L"x", title=which_var, aspect=1.)
         lines!(ax, x_plot, truth, linewidth=3, label="truth", color=cols[1])
         lines!(ax, x_plot, locenkf[1], linewidth=0.8, label="EnKF")
         for ens_idx in 2:Nens_plot
@@ -753,16 +762,24 @@ make_figs && with_theme(my_theme) do
     hlocenkf_θ_vs = @lift(hlocenkf_θ_v_t($time))
 
     px_size = 600
-    fig = Figure(size=(3px_size, px_size))
-    for (j, vv) in enumerate([("ρ", ρs, hlocenkf_ρs, hlocenkf_θ_ρs), ("v", vs, hlocenkf_vs, hlocenkf_θ_vs), ("p", ps, hlocenkf_ps, hlocenkf_θ_ps),])
+    which_plot = ["ρ", "p"]
+    which_axis = 0
+    fig = Figure(size=(length(which_plot)*px_size, px_size))
+    for (j, vv) in enumerate([
+        ("ρ", ρs, hlocenkf_ρs, hlocenkf_θ_ρs),
+        ("v", vs, hlocenkf_vs, hlocenkf_θ_vs),
+        ("p", ps, hlocenkf_ps, hlocenkf_θ_ps)
+    ])
         which_var, truth, hlocenkf, hlocenkf_θ_var = vv
-        ax = Axis(fig[1, j], xlabel=L"x", title=which_var, aspect=1.)
+        in(which_var, which_plot) || continue
+        which_axis += 1
+        ax = Axis(fig[1, which_axis], xlabel=L"x", title=which_var, aspect=1.)
         lines!(ax, x_plot, truth, linewidth=3, label="truth", color=cols[1])
         lines!(ax, x_plot, hlocenkf[1], linewidth=0.8, label="GSBL-EnKF")
         for ens_idx in 2:Nens_plot
             lines!(ax, x_plot, hlocenkf[ens_idx], linewidth=0.4)
         end
-        scatter!(ax, θgrid, hlocenkf_θ_var, label="θ_$which_var")
+        # scatter!(ax, θgrid, hlocenkf_θ_var, label="θ_$which_var")
         axislegend(ax, position=:rt)
     end
 
@@ -779,7 +796,7 @@ make_figs && with_theme(my_theme) do
     fig = Figure(size=(1050, 500))
     entropy_locenkf = reduce(hcat, metrics_locenkf[:entropy])'
     entropy_hlocenkf = reduce(hcat, metrics_hlocenkf[:entropy])'
-    ylims = extrema(reduce(hcat, collect(extrema(x)) for x in [entropy_locenkf, entropy_hlocenkf]))
+    ylims = extrema(reduce(hcat, collect(extrema(x)) for x in [entropy_locenkf[2:end,:], entropy_hlocenkf[2:end,:]]))
     ax1 = Axis(fig[1, 1],
         title="Euler Entropy, EnKF",
         aspect=1.,
