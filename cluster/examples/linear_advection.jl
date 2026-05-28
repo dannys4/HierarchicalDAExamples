@@ -27,15 +27,15 @@ random_seed = rand(UInt)
 # PDE solution parameters
 polydeg = 2
 advection_velocity = 0.1
-Ncells = 200
+Ncells = 100
 coordinates_min, coordinates_max = -1., 1.
 
 # %%
 # Data generation setup
-delta_y = 20
+delta_y = 10
 delta_t_dyn = 0.05
-delta_t_obs = 0.25
-t0, tf = 0.0, 10.0
+delta_t_obs = 0.5
+t0, tf = 0.0, 20.0
 sigma_x_data = 0.
 sigma_y = 0.05
 
@@ -44,8 +44,8 @@ sigma_y = 0.05
 
 # %%
 # Important parameters for data assimilation
-Ne = 50 # Ensemble size
-Lrad = 0.01 # Localization radius
+Ne = 75 # Ensemble size
+Lrad = delta_t_obs * advection_velocity # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0 = 0.8 # Parameter for initial condition
@@ -54,10 +54,11 @@ alpha_k_f0 = 0.8 # Parameter for initial condition
 # ### Parameters for GSBL
 
 # %%
-order_PA = 3
-hyperprior_idx = 3
+order_PA = 2
+hyperprior_idx = 2
 theta_init = 1.
 Niter = 2
+is_theta_shared = false
 
 # %%
 # Assign any given arguments
@@ -82,7 +83,7 @@ end
 
 # %%
 using Pkg
-Pkg.activate(proj_path)
+# Pkg.activate(proj_path)
 @info "Activated project"
 
 # %%
@@ -111,11 +112,12 @@ Random.seed!(random_seed);
 
 # %%
 # Set up functions for the PDE, initial condition and entropy setup
-function sawtooth_fcn(x, t, α;
-    a=-1, b=1, N_saw=4, u_a=0.0, u_b=1.0)
-    time_norm_x = x[] - α[] * t[]
-    norm_x = (time_norm_x - a) / (b - a)
-    unit_x = norm_x - floor(norm_x)
+function sawtooth_fcn(
+    x, t, α;
+    a=-1, b=1, N_saw=4, u_a=0.0, u_b=1.0
+)
+    time_norm_x = (((x[] - a) - α[] * t[]) / (b - a)) % 1
+    unit_x = time_norm_x < 0 ? 1 + time_norm_x : time_norm_x
     which_seg = unit_x * N_saw
     per_x = (which_seg - floor(which_seg))
     u_a + per_x * (u_b - u_a)
@@ -160,13 +162,19 @@ xgrid = vec(mesh.md.xq);
 
 # %%
 Nx = length(xgrid)
-Ny = ceil(Int64, Nx / delta_y)
 Tf = Int((tf - t0) / delta_t_obs)
 π0 = MvNormal(zeros(Nx), Matrix(1.0 * I, Nx, Nx))
 
 # %%
-h(x, t) = x[1:delta_y:end]
-H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[1:delta_y:end, :]))
+sparse_obs = 1:delta_y:Nx
+# OPTIONAL: Put cluster of points near zero
+# dens_obs_frac = 1 / 20
+# center_region = round(Int, Nx*(0.5 - dens_obs_frac)) : (delta_y ÷ 3) : round(Int, Nx*(0.5 + dens_obs_frac))
+# obs_indices = sort(unique(vcat(sparse_obs, center_region)))
+obs_indices = sparse_obs
+Ny = length(obs_indices)
+h(x, t) = x[obs_indices]
+H = LinearMap(sparse(Matrix(1.0 * I, Nx, Nx)[obs_indices, :]))
 F = StateSpace(x -> x, h)
 sys_advection = TrixiSystem(equations, solver, mesh, semi)
 ϵx_data = AdditiveInflation(Nx, zeros(Nx), sigma_x_data)
@@ -179,14 +187,19 @@ u0 = sawtooth_fcn.(xgrid, (0,), (advection_velocity,))
 data = generate_data_trixi(model, u0, Tf, sys_advection; (true_soln!)=soln!)
 
 # %%
+x_plot, data_plot = get_plot_ensemble(data.xt, sys_advection)
+data_plot = data_plot[:, 1, :]
+
+# %%
 make_figs && with_theme(my_theme) do
     fig = Figure()
     ax = Axis(fig[1, 1])
 
-    lines!(ax, xgrid, data.xt[:, 1])
-    lines!(ax, xgrid, data.xt[:, end])
-    scatter!(ax, xgrid[1:delta_y:end], data.yt[:, end])
-
+    lines!(ax, xgrid, data.xt[:, 1], label=L"u(t_0, x)")
+    lines!(ax, xgrid, data.xt[:, end], label=L"u(t_T,x)")
+    scatter!(ax, xgrid[obs_indices], data.yt[:, end], label=L"y_T")
+    # vlines!(ax, xgrid[center_region[[1,end]]], color=:black, label="Dens obs region")
+    axislegend()
     fig
 end
 
@@ -199,9 +212,6 @@ for i = 1:Ne
 end
 
 # %%
-Nx = length(xgrid)
-yidx = 1:delta_y:Nx
-
 # Create Localization structure
 # Gxx(i, j) = periodicmetric!(i, j, Nx)
 metric = PeriodicMetric(round.(extrema(xgrid))...)
@@ -219,36 +229,102 @@ locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 X_locenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, locenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
 
 # %%
+is_theta_shared = false
+hyperprior_idx = 4
 # Selection of hyper-prior parameters power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
-β_range = [1.001 + Ne / 2, 2.5918 + Ne / 2, 2.0165, 1.0017];
+β_shift = is_theta_shared ? Ne / 2 : 1 / 2
+β_range = [1.001 + β_shift, 2.5918 + β_shift, 2.0165, 1.0017];
 β_GSBL = β_range[hyperprior_idx] # shape parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
 # r_GSBL, β_GSBL, ϑ_GSBL = 1., 30., 1e-3
-# ϑ_GSBL = 1e-3
+ϑ_GSBL = 1e-7
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
-PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(coordinates_min, coordinates_max))
-S = LinearMaps.LinearMap(PA.P)
+# order_PA = 1
+# PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(coordinates_min, coordinates_max))
+# S = LinearMap(PA.P * PA.P)
+diff_map = DGMultiDiff1D(sys_advection, false)
+diff_mat = sparse(diff_map)
+sqrt_quad_wts = sqrt.(vec(sys_advection.mesh.md.wJq))
+S = LinearMap(Matrix(Diagonal(sqrt_quad_wts) * diff_mat * diff_mat))
 xgrid_S = xgrid
 
 # %%
 theta_init_vec = fill(theta_init, length(xgrid_S))
+theta_init_space = is_theta_shared ? theta_init_vec : repeat(theta_init_vec, 1, Ne)
 Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
+forecast_scale_gsbl = 20
+Lrad_gsbl = 0.5Lrad
+# Loc_gsbl = ShockLocalization(PA.P, xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true, is_periodic=true, thresh=0.75)
+Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true)
 
 # %%
+Niter = 10
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter=Niter, θinit=theta_init)
+
+# %%
+beta_infl_hlocenkf = beta_infl
+ϵxβ_hlocenkf = MultiAddInflation(Nx, beta_infl_hlocenkf, zeros(Nx), sigma_x_filter)
+
 @info "Performing GSBL EnKF..."
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxβ_enkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+T_hlocenkf = Tf
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, ϵxβ_hlocenkf, hlocenkf, deepcopy(X0), model.Ny, model.Nx, t0, sys_advection);
+
+# %%
+make_figs && with_theme(my_theme) do
+    tsnap = length(X_hlocenkf) - 1
+    t_val = data.tt[tsnap]
+    x_tsnap = data_plot[:, tsnap]
+    y_tsnap = data.yt[:, tsnap]
+
+    _, X_enkf_tsnap = get_plot_ensemble(X_locenkf[tsnap+1], sys_advection)
+    X_enkf_tsnap = X_enkf_tsnap[:, 1, :]
+    X_locenkf_tsnap = vec(mean(X_enkf_tsnap; dims=2))
+
+    _, X_gsbl_tsnap = get_plot_ensemble(X_hlocenkf[tsnap+1], sys_advection)
+    X_gsbl_tsnap = X_gsbl_tsnap[:, 1, :]
+    X_hlocenkf_tsnap = vec(mean(X_gsbl_tsnap; dims=2))
+    theta_tsnap = θ_hlocenkf[tsnap+1]
+    cols = Makie.wong_colors()
+
+    fig = Figure(size=(750, 550))
+    ax_enkf = Axis(fig[1, 1], title="EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_gsbl = Axis(fig[2, 1], title="GSBL-EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_theta = Axis(fig[3, 1], ylabel=L"\theta", aspect=10, xlabel=L"x")
+    linkxaxes!(ax_enkf, ax_gsbl, ax_theta)
+
+    lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
+    lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
+    if is_theta_shared
+        scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5)
+    end
+    for j in 1:Ne
+        col = (cols[1+(j%length(cols))], 0.4)
+        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=2.0, color=col)
+        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=2.0, color=col)
+        if !is_theta_shared
+            scatter!(ax_theta, xgrid, theta_tsnap[:, j], label="θ", markersize=5, color=col)
+        end
+    end
+    lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_gsbl, xgrid[obs_indices], y_tsnap, label="Observation", color=:black)
+    lines!(ax_enkf, x_plot, X_locenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_enkf, xgrid[obs_indices], y_tsnap, label="Observation", color=:black)
+    axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.png"), fig)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.pdf"), fig)
+end
 
 # %%
 begin
@@ -262,7 +338,7 @@ begin
     get_errs = (X, metric, which_var) -> map(axes(data.xt, 2)) do t_idx
         CRPS(X[t_idx+1][which_var, :, :], @view(data_quad[which_var, :, t_idx]), metric, mesh_wts)
     end
-    get_Lp = (err, rel_norms, prop::Symbol) -> mean(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
+    get_Lp = (err, rel_norms, prop::Symbol) -> map(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
 
     entropy_state = u -> Trixi.entropy(prim2cons(u, equations), equations)
     entropy_ensemble = u_ens -> map(entropy_state, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
@@ -299,6 +375,25 @@ for alg_name in ["locenkf", "hlocenkf"]
     tv_alg = map(TV_norm_ensemble, X_traj)
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
+end
+@info "" mean(metrics_hlocenkf[:crps2_hlocenkf][]) mean(metrics_hlocenkf[:rmse2_hlocenkf][]) mean(metrics_locenkf[:crps2_locenkf][]) mean(metrics_locenkf[:rmse2_locenkf][])
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure(size=(500, 300))
+    lims = (nothing, nothing, 1e-2, 1e0)
+    ax = Axis(fig[1, 1], yscale=log10, limits=lims)
+    gsbl_crps = metrics_hlocenkf[:crps2_hlocenkf][]
+    gsbl_rmse = metrics_hlocenkf[:rmse2_hlocenkf][]
+    enkf_crps = metrics_locenkf[:crps2_locenkf][]
+    enkf_rmse = metrics_locenkf[:rmse2_locenkf][]
+    cols = Makie.wong_colors()
+    lines!(gsbl_crps, color=cols[1], linewidth=3, label="GSBL CRPS")
+    lines!(enkf_crps, color=cols[2], linewidth=3, label="EnKF CRPS")
+    lines!(gsbl_rmse, color=cols[1], linestyle=:dash, linewidth=3, label="GSBL RMSE")
+    lines!(enkf_rmse, color=cols[2], linestyle=:dash, linewidth=3, label="EnKF RMSE")
+    axislegend()
+    fig
 end
 
 # %%
@@ -342,60 +437,16 @@ jldopen(joinpath(data_path, "advection_" * string(now()) * ".jld2"), "w") do fil
 end;
 
 # %%
-make_figs && with_theme(my_theme) do
-    xt = data.xt[:, 9]
-    fig = Figure()
-    ax = Axis(fig[1, 1])
-    lines!(xgrid, xt, linewidth=3, label="True state")
-    sp = 10 * PA.P * xt
-    lines!(xgrid_S, sp, linewidth=3, label="PA application")
-    axislegend()
-    display(fig)
-end
-
-# %%
-x_plot, data_plot = get_plot_ensemble(data.xt, sys_advection)
-data_plot = data_plot[:, 1, :]
-
-# %%
-make_figs && with_theme(my_theme) do
-    tsnap = length(X_hlocenkf) - 1
-    t_val = data.tt[tsnap]
-    x_tsnap = data_plot[:, tsnap]
-    y_tsnap = data.yt[:, tsnap]
-
-    _, X_enkf_tsnap = get_plot_ensemble(X_locenkf[tsnap+1], sys_advection)
-    X_enkf_tsnap = X_enkf_tsnap[:, 1, :]
-    X_locenkf_tsnap = vec(mean(X_enkf_tsnap; dims=2))
-
-    _, X_gsbl_tsnap = get_plot_ensemble(X_hlocenkf[tsnap+1], sys_advection)
-    X_gsbl_tsnap = X_gsbl_tsnap[:, 1, :]
-    X_hlocenkf_tsnap = vec(mean(X_gsbl_tsnap; dims=2))
-    theta_tsnap = θ_hlocenkf[tsnap+1]
-    cols = Makie.wong_colors()
-
-    fig = Figure(size=(750, 550))
-    ax_enkf = Axis(fig[1, 1], title="EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
-    ax_gsbl = Axis(fig[2, 1], title="GSBL-EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
-    ax_theta = Axis(fig[3, 1], ylabel=L"\theta", aspect=10, xlabel=L"x")
-    linkxaxes!(ax_enkf, ax_gsbl, ax_theta)
-
-    lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
-    lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
-    scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5, color=cols[2])
-    for j in 1:Ne
-        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
-        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
-    end
-    lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
-    scatter!(ax_gsbl, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
-    lines!(ax_enkf, x_plot, X_locenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
-    scatter!(ax_enkf, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
-    axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
-    display(fig)
-    save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.png"), fig)
-    save(joinpath(@__DIR__, "figs", "linear_advection", "profile_comparison.pdf"), fig)
-end
+# make_figs && with_theme(my_theme) do
+#     xt = data.xt[:, 9]
+#     fig = Figure()
+#     ax = Axis(fig[1, 1])
+#     lines!(xgrid, xt, linewidth=3, label="True state")
+#     sp = 10 * PA.P * xt
+#     lines!(xgrid_S, sp, linewidth=3, label="PA application")
+#     axislegend()
+#     display(fig)
+# end
 
 # %%
 make_figs && with_theme(my_theme) do
@@ -403,7 +454,7 @@ make_figs && with_theme(my_theme) do
     x_tsnap = data.xt[:, tsnap]
     X_hlocenkf_tsnap = vec(mean(X_hlocenkf[tsnap+1]; dims=2))
     X_ens_tsnap = [X_hlocenkf[tsnap+1][:, j] for j in 1:Ne]
-    theta_tsnap = θhist[tsnap+1]
+    theta_tsnap = θ_hlocenkf[tsnap+1]
     theta_tsnap *= 0.1 / maximum(theta_tsnap)
     y_tsnap = data.yt[:, tsnap]
     cols = Makie.wong_colors()
@@ -416,11 +467,11 @@ make_figs && with_theme(my_theme) do
     lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
     lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
     # lines!(ax1, xgrid, ys, linewidth=3, label="State")
-    scatter!(ax1, xgrid_S, theta_tsnap, label="θ", markersize=5)
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.4))
+        scatter!(ax1, xgrid_S, theta_tsnap[:,j], label="θ", markersize=5)
     end
-    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
+    scatter!(ax1, xgrid[obs_indices], y_tsnap)
 
     axislegend(ax1)
 
@@ -437,17 +488,17 @@ make_figs && with_theme(my_theme) do
     y_tsnap = @lift(data.yt[:, $tsnap])
     X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
     X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
-    theta_tsnap = @lift(θhist[$tsnap+1])
+    theta_tsnap = [@lift(θ_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
     fig = Figure()
     ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
 
-    lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
+    # lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
     lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
-    scatter!(ax1, xgrid_S, theta_tsnap, label="θ")
     for j in 1:Ne
-        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.3))
+        scatter!(ax1, xgrid_S, theta_tsnap[j])
     end
-    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
+    scatter!(ax1, xgrid[obs_indices], y_tsnap)
     axislegend(ax1)
     framerate = 10
     timestamps = range(t_start, Tf, step=1)
@@ -466,17 +517,17 @@ make_figs && with_theme(my_theme) do
     tsnap = Observable(t_start)
     x_tsnap = @lift(data.xt[:, $tsnap])
     y_tsnap = @lift(data.yt[:, $tsnap])
-    X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
+    # X_locenkf_tsnap = @lift(vec(mean(X_locenkf[$tsnap+1]; dims=2)))
     X_ens_tsnap = [@lift(X_locenkf[$tsnap+1][:, j]) for j in 1:Ne]
     fig = Figure()
     ax1 = Axis(fig[1, 1], title="Localized EnKF")
 
-    lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="LocEnKF")
+    # lines!(ax1, xgrid, X_locenkf_tsnap, linewidth=3, label="LocEnKF")
     lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
     for j in 1:Ne
-        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+        lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.3))
     end
-    scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
+    scatter!(ax1, xgrid[obs_indices], y_tsnap)
     axislegend(ax1)
     framerate = 10
     timestamps = range(t_start, Tf, step=1)

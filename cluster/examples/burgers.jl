@@ -25,31 +25,34 @@ random_seed = rand(UInt)
 
 # %%
 # Problem setup params
-polydeg = 4 # Order in space
-Ncells = 75 # Number of DG cells
-delta_y = 50 # Spatial frequency of observation. Not regularly spaced
+polydeg = 2 # Order in space
+Ncells = 100 # Number of DG cells
+delta_y = 15 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
-delta_t_obs = 0.05 # Amount of time between each observation
+delta_t_obs = 0.025 # Amount of time between each observation
 
 sigma_x_data = 0. # Noise in the state dynamics (i.e., the PDE solution itself)
 sigma_y = 0.05 # Noise in the state observation (i.e., what the "sensors" record)
 
-t0, tf = 0.0, 1.0 # Start and end time
+t0, tf = 0.0, 2.0 # Start and end time
 
 # %%
 # Important parameters for data assimilation
 Ne = 40 # Ensemble size
-Lrad = delta_t_obs # Localization radius
+Lrad = 1.2 * delta_t_obs # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
+initial_noise_perturb = 0.8
 
 # %%
 # GSBL Hyperparams
-order_PA = 3 # Poly annihilator order
-Niter = 5
+order_PA = 5 # Poly annihilator order
+Niter = 2
 theta_init = 1.
-hyperprior_idx = 3
+hyperprior_idx = 2
+forecast_scale_gsbl = 3.0
+is_theta_shared = false
 
 # %%
 # Assign any given arguments
@@ -136,7 +139,9 @@ mesh_wts = vec(sys_burgers.mesh.md.wJq)
 ents = [mesh_wts'Trixi.entropy.(x, (sys_burgers.equations,)) for x in eachcol(data.xt)]
 
 # %%
-make_figs && display(lines(ents; axis=(; limits=(0, nothing, 0, nothing))));
+make_figs && with_theme(my_theme) do
+    lines(ents; axis=(; limits=(0, nothing, 0, nothing)))
+end
 
 # %%
 x_plot, data_plot = get_plot_ensemble(data.xt, sys_burgers)
@@ -163,12 +168,21 @@ end
 
 # %%
 # Define function class for the initial condition
-f0 = SmoothPeriodic(xgrid, alpha_k_f0; L=L_f0);
+f0 = SmoothPeriodic(xgrid, alpha_k_f0; L=L_f0)
 X = zeros(model.Nx, Ne)
 
 for i = 1:Ne
     regenerate!(f0)
-    X[:, i] = f0.(xgrid) / 3 .+ 0.5
+    X[:, i] = (1 - initial_noise_perturb) * x0 + initial_noise_perturb * (f0.(xgrid) / 3 .+ 0.5)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure()
+    ax = Axis(fig[1, 1])
+    foreach(i -> lines!(ax, xgrid, X[:, i]), 1:10)
+    lines!(ax, xgrid, x0, linewidth=10)
+    fig
 end
 
 # %%
@@ -187,15 +201,6 @@ Loc = Localization(xgrid, Lrad, metric, symm_kernel=true, is_sparse=true)
 ϵxbeta_filter = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
-make_figs && with_theme(my_theme) do
-    fig = Figure()
-    ax = Axis(fig[1, 1])
-    foreach(i -> lines!(ax, xgrid, X[:, i]), 1:10)
-    lines!(ax, xgrid, x0, linewidth=10)
-    fig
-end
-
-# %%
 locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 
 # %%
@@ -203,37 +208,90 @@ locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 X_locenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, locenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
 
 # %%
-# Selection of hyper-prior parameters
-# power parameter
+hyperprior_idx = 4
+# Selection of hyper-prior parameters power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
 # shape parameter
-beta_range = [1.001 + Ne / 2, 2.5918 + Ne / 2, 2.0165, 1.0017];
-beta_GSBL = beta_range[hyperprior_idx] # shape parameter
+β_shift = is_theta_shared ? Ne / 2 : 1 / 2
+β_range = [1.001 + β_shift, 2.5918 + β_shift, 2.0165, 1.0017];
+β_GSBL = β_range[hyperprior_idx] # shape parameter
 # rate parameters
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
-dist = GeneralizedGamma(r_GSBL, beta_GSBL, ϑ_GSBL);
+
+ϑ_GSBL = 5e-2
+dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
-# PA_offset = ceil(Int64, order_PA / 2)
-# Ns = Nx - 2 * PA_offset
-PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(-1., 1.))
-# @assert size(PA.P) == (Ns, Nx)
+# order_PA = 2
+# PA = PolyAnnil(xgrid, order_PA; istruncated=true, isperiodic=true, periodic_limits=(-1., 1.))
+# S = LinearMaps.WrappedMap(PA.P * PA.P)
+diff_map = DGMultiDiff1D(sys_burgers, false)
+diff_mat = sparse(diff_map)
+S = LinearMap(diff_mat * diff_mat)
 
-S = LinearMaps.WrappedMap(PA.P)
-
-theta_init_vec = fill(theta_init, size(PA.P, 1))
+theta_init_vec = fill(theta_init, size(S, 1))
+theta_init_space = is_theta_shared ? theta_init_vec : repeat(theta_init_vec, 1, Ne)
 Cθ = LinearMap(Diagonal(theta_init_vec))
-sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ);
+sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-# Niter, theta_init = 5, 1.
-hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc, dist, theta_init_vec, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
+forecast_scale_gsbl = 40
+Lrad_gsbl = 0.5Lrad
+Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true)
+
+# %%
+Niter = 20
+hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
 
 # %%
 @info "Performing GSBL EnKF..."
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, ϵxbeta_filter, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
+T_hlocenkf = Tf # or Tf
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, ϵxbeta_filter, hlocenkf, deepcopy(X), model.Ny, model.Nx, t0, sys_burgers);
+
+# %%
+make_figs && with_theme(my_theme) do
+    tsnap = 40
+    t_val = data.tt[tsnap]
+    x_tsnap = data_plot[:, tsnap]
+    y_tsnap = data.yt[:, tsnap]
+
+    _, X_enkf_tsnap = get_plot_ensemble(X_locenkf[tsnap+1], sys_burgers)
+    X_enkf_tsnap = X_enkf_tsnap[:, 1, :]
+    X_locenkf_tsnap = vec(mean(X_enkf_tsnap; dims=2))
+
+    _, X_gsbl_tsnap = get_plot_ensemble(X_hlocenkf[tsnap+1], sys_burgers)
+    X_gsbl_tsnap = X_gsbl_tsnap[:, 1, :]
+    X_hlocenkf_tsnap = vec(mean(X_gsbl_tsnap; dims=2))
+    theta_tsnap = θ_hlocenkf[tsnap+1]
+    cols = Makie.wong_colors()
+
+    fig = Figure(size=(750, 550))
+    ax_enkf = Axis(fig[1, 1], title="EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_gsbl = Axis(fig[2, 1], title="GSBL-EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
+    ax_theta = Axis(fig[3, 1], ylabel=L"\theta", aspect=10, xlabel=L"x")
+    linkxaxes!(ax_enkf, ax_gsbl, ax_theta)
+
+    lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
+    lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
+    is_theta_shared && scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5)
+    for j in 1:Ne
+        color = (cols[1+(j%length(cols))], 0.4)
+        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8; color)
+        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8; color)
+        is_theta_shared || scatter!(ax_theta, xgrid, theta_tsnap[:, j], label="θ", markersize=5; color)
+    end
+    lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_gsbl, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
+    lines!(ax_enkf, x_plot, X_locenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
+    scatter!(ax_enkf, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
+    axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
+    Label(fig[0,1], "Time $t_val", tellwidth=false)
+    display(fig)
+    # save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.png"), fig)
+    # save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.pdf"), fig)
+end
 
 # %%
 begin
@@ -247,7 +305,7 @@ begin
     get_errs = (X, metric, which_var) -> map(axes(data.xt, 2)) do t_idx
         CRPS(X[t_idx+1][which_var, :, :], @view(data_quad[which_var, :, t_idx]), metric, mesh_wts)
     end
-    get_Lp = (err, rel_norms, prop::Symbol) -> mean(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
+    get_Lp = (err, rel_norms, prop::Symbol) -> map(inp -> getproperty(inp[1], prop) / inp[2], zip(err, rel_norms))
 
     entropy_state = u -> Trixi.entropy(prim2cons(u, equations), equations)
     entropy_ensemble = u_ens -> map(entropy_state, eachslice(u_ens, dims=(2, 3)))' * mesh_wts
@@ -262,6 +320,7 @@ end
 
 # %%
 for alg_name in ["locenkf", "hlocenkf"]
+    start_idx = 1
     # Error metrics
     metric_sym = Symbol("metrics_$alg_name")
     metric_dict = @eval($metric_sym)
@@ -275,7 +334,7 @@ for alg_name in ["locenkf", "hlocenkf"]
         rel_norms = @eval($rel_norms_sym)
         for metric in [:rmse, :crps]
             metric_sym = Symbol(string(metric) * string(which_norm) * "_" * alg_name)
-            metric_dict[metric_sym] = [get_Lp(errs[j], rel_norms[j, :], metric) for j in 1:Nvar]
+            metric_dict[metric_sym] = [get_Lp(errs[j][start_idx:end], rel_norms[j, start_idx:end], metric) for j in 1:Nvar]
         end
     end
 
@@ -284,6 +343,26 @@ for alg_name in ["locenkf", "hlocenkf"]
     tv_alg = map(TV_norm_ensemble, X_traj)
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
+end
+@info "" mean(metrics_hlocenkf[:crps2_hlocenkf][]) mean(metrics_hlocenkf[:rmse2_hlocenkf][]) mean(metrics_locenkf[:crps2_locenkf][]) mean(metrics_locenkf[:rmse2_locenkf][])
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure(size=(500, 300))
+    lims = (nothing, nothing, 1e-2, 1e0)
+    ax = Axis(fig[1, 1], yscale=log10, limits=lims)
+    gsbl_crps = metrics_hlocenkf[:crps2_hlocenkf][]
+    gsbl_rmse = metrics_hlocenkf[:rmse2_hlocenkf][]
+    enkf_crps = metrics_locenkf[:crps2_locenkf][]
+    enkf_rmse = metrics_locenkf[:rmse2_locenkf][]
+    cols = Makie.wong_colors()
+    # vlines!([3, 5, 7], color=:black, label="Burn-in")
+    lines!(gsbl_crps, color=cols[1], linewidth=3, label="GSBL CRPS")
+    lines!(enkf_crps, color=cols[2], linewidth=3, label="EnKF CRPS")
+    lines!(gsbl_rmse, color=cols[1], linestyle=:dash, linewidth=3, label="GSBL RMSE")
+    lines!(enkf_rmse, color=cols[2], linestyle=:dash, linewidth=3, label="EnKF RMSE")
+    axislegend()
+    fig
 end
 
 # %%
@@ -331,47 +410,7 @@ end;
 
 # %%
 make_figs && with_theme(my_theme) do
-    tsnap = 11 #length(X_hlocenkf) - 1
-    t_val = data.tt[tsnap]
-    x_tsnap = data_plot[:, tsnap]
-    y_tsnap = data.yt[:, tsnap]
-
-    _, X_enkf_tsnap = get_plot_ensemble(X_locenkf[tsnap+1], sys_burgers)
-    X_enkf_tsnap = X_enkf_tsnap[:, 1, :]
-    X_locenkf_tsnap = vec(mean(X_enkf_tsnap; dims=2))
-
-    _, X_gsbl_tsnap = get_plot_ensemble(X_hlocenkf[tsnap+1], sys_burgers)
-    X_gsbl_tsnap = X_gsbl_tsnap[:, 1, :]
-    X_hlocenkf_tsnap = vec(mean(X_gsbl_tsnap; dims=2))
-    theta_tsnap = θ_hlocenkf[tsnap+1]
-    cols = Makie.wong_colors()
-
-    fig = Figure(size=(750, 550))
-    ax_enkf = Axis(fig[1, 1], title="EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
-    ax_gsbl = Axis(fig[2, 1], title="GSBL-EnKF", xlabel=L"x", ylabel=L"u(x,%$(t_val))")
-    ax_theta = Axis(fig[3, 1], ylabel=L"\theta", aspect=10, xlabel=L"x")
-    linkxaxes!(ax_enkf, ax_gsbl, ax_theta)
-
-    lines!(ax_enkf, x_plot, x_tsnap, linewidth=3, label="Data")
-    lines!(ax_gsbl, x_plot, x_tsnap, linewidth=3, label="Data")
-    scatter!(ax_theta, xgrid, theta_tsnap, label="θ", markersize=5, color=cols[2])
-    for j in 1:Ne
-        lines!(ax_enkf, x_plot, X_enkf_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
-        lines!(ax_gsbl, x_plot, X_gsbl_tsnap[:, j], linewidth=0.8, color=(cols[1+(j%length(cols))], 0.4))
-    end
-    lines!(ax_gsbl, x_plot, X_hlocenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
-    scatter!(ax_gsbl, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
-    lines!(ax_enkf, x_plot, X_locenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
-    scatter!(ax_enkf, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
-    axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
-    display(fig)
-    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.png"), fig)
-    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.pdf"), fig)
-end
-
-# %%
-make_figs && with_theme(my_theme) do
-    tsnap = length(X_locenkf) - 1
+    tsnap = 5#length(X_locenkf) - 1
     x_tsnap = data.xt[:, tsnap]
     X_locenkf_tsnap = vec(mean(X_locenkf[tsnap+1]; dims=2))
     X_ens_tsnap = [X_locenkf[tsnap+1][:, j] for j in 1:Ne]
@@ -406,7 +445,7 @@ make_figs && with_theme(my_theme) do
     ys = @lift(ut(($tsnap) * delta_t_obs))
     X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
     X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
-    theta_tsnap = @lift(θ_hlocenkf[$tsnap+1])
+    theta_tsnap = [@lift(θ_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
     cols = Makie.wong_colors()
 
     fig = Figure()
@@ -415,9 +454,9 @@ make_figs && with_theme(my_theme) do
 
     lines!(ax1, xgrid, X_hlocenkf_tsnap, linewidth=3, label="HLocEnKF")
     lines!(ax1, xgrid, ys, linewidth=3, label="State")
-    lines!(ax1, xgrid, theta_tsnap, linewidth=3, label="θ")
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
+        lines!(ax1, xgrid, theta_tsnap[j], linewidth=3)
     end
     scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
 
@@ -529,4 +568,36 @@ make_figs && with_theme(my_theme) do
     display(fig)
     save(joinpath(@__DIR__, "figs", "burgers", "entropy.pdf"), fig)
     save(joinpath(@__DIR__, "figs", "burgers", "entropy.png"), fig)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure(size=(1050, 500))
+    tv_locenkf = reduce(hcat, metrics_locenkf[:tv_norm]')'
+    tv_hlocenkf = reduce(hcat, metrics_hlocenkf[:tv_norm]')'
+    ylims = extrema(reduce(hcat, collect(extrema(x)) for x in [tv_locenkf, tv_hlocenkf]))
+    ax1 = Axis(fig[1, 1],
+        title="Burgers TV, EnKF",
+        aspect=1.,
+        xlabel=L"t",
+        ylabel="TV",
+        limits=(t0, tf, ylims...)
+    )
+    ax2 = Axis(fig[1, 2],
+        title="Burgers TV, GSBL-EnKF",
+        aspect=1.,
+        xlabel=L"t",
+        limits=(t0, tf, ylims...)
+    )
+    # lines!(ax1, data.tt, entropy_data, linewidth=3, label="TV of solution")
+    # lines!(ax2, data.tt, entropy_data, linewidth=3, label="TV of solution")
+    for ens_idx in 1:Ne
+        lines!(ax1, data.tt, tv_locenkf[2:end, ens_idx], linewidth=0.5)
+        lines!(ax2, data.tt, tv_hlocenkf[2:end, ens_idx], linewidth=0.5)
+    end
+    # axislegend(ax1)
+    # axislegend(ax2)
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "tv.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "tv.png"), fig)
 end

@@ -26,8 +26,8 @@ make_figs = true
 
 # %%
 # Problem setup params
-polydeg = 3 # Order in space
-Ncells_dim = 48 # Number of DG cells
+polydeg = 2 # Order in space
+Ncells_dim = 36 # Number of DG cells
 delta_y = 8 # Spatial frequency of observation. Not regularly spaced
 delta_t_dyn = 0.005 # Timestep for PDE dynamics
 delta_t_obs = 0.025 # Amount of time between each observation
@@ -35,13 +35,13 @@ delta_t_obs = 0.025 # Amount of time between each observation
 sigma_x_data = 0. # Noise in the state dynamics (i.e., the PDE solution itself)
 sigma_y = 1.0 # Noise in the state observation (i.e., what the "sensors" record)
 
-t0, tf = 0.0, 0.75 # Start and end time
+t0, tf = 0.0, 0.5 # Start and end time
 
 # %%
 # Important parameters for data assimilation
 Ne = 50 # Ensemble size
 Nx_dim = Ncells_dim * (polydeg + 1)
-Lrad = 0.10 # Localization radius
+Lrad = delta_t_obs # Localization radius: Estimate max wave speed
 sigma_x_filter = 0.25 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
@@ -52,7 +52,7 @@ cg_tol = 1e-2
 order_PA = 3 # Poly annihilator order
 Niter = 2
 theta_init = 1.
-hyperprior_idx = 1
+hyperprior_idx = 3
 
 # %%
 # Assign any given arguments
