@@ -314,7 +314,7 @@ elseif which_initial == :random_shock
     levels_R_std = use_positivity_transform ? [0.05, 0., 0.05] : [0.006, 0., 0.005]
     dist_L = MvNormal(levels_L_mean, levels_L_std)
     dist_R = MvNormal(levels_R_mean, levels_R_std)
-    shock_loc_dist = Truncated(Normal(0.5, 0.15), 1e-3, 1 - 1e-3)
+    shock_loc_dist = Truncated(Normal(0.5, 0.125), 1e-3, 1 - 1e-3)
     f0 = RandomShockInitialization(dist_L, dist_R, shock_loc_dist)
 else
     throw(ArgumentError("Unexpected initial condition $which_initial"))
@@ -721,7 +721,7 @@ jldopen(joinpath(data_path, "sod_" * string(now()) * ".jld2"), "w") do file
     end
 
     GSBL_param_group = JLD2.Group(file, "GSBL_parameters")
-    for GSBL_param in [:order_PA, :Niter, :theta_init, :dist]
+    for GSBL_param in [:Niter, :theta_init, :dist]
         GSBL_param_group[string(GSBL_param)] = @eval($GSBL_param)
     end
 

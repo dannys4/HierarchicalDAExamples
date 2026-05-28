@@ -41,14 +41,14 @@ d2_sin = d_wrap * sin_eval
 d2_sin_true = -((pi)^2)*sin_eval
 
 # %%
-using CairoMakie
-fig = Figure()
-ax = Axis(fig[1,1], yscale=log10)
-# lines!(xgrid, sin_eval, label="Eval")
-lines!(xgrid, abs2.(d2_sin - d2_sin_true), label="D2")
-# lines!(xgrid, d2_sin_true, label="True d2")
-# axislegend()
-display(fig)
+# using CairoMakie
+# fig = Figure()
+# ax = Axis(fig[1,1], yscale=log10)
+# # lines!(xgrid, sin_eval, label="Eval")
+# lines!(xgrid, abs2.(d2_sin - d2_sin_true), label="D2")
+# # lines!(xgrid, d2_sin_true, label="True d2")
+# # axislegend()
+# display(fig)
 
 # %%
 # rd = sys_burgers.dg.basis
@@ -79,10 +79,10 @@ du_quad_dx_vec = diff_map * u_quad_vec
 
 
 # %%
-using CairoMakie
-f, ax, _ = lines(xgrid, du_quad_dx_vec, linewidth=3)
-lines!(ax, xgrid, pi * cos.(pi * xgrid), linestyle=:dash, linewidth=3)
-f
+# using CairoMakie
+# f, ax, _ = lines(xgrid, du_quad_dx_vec, linewidth=3)
+# lines!(ax, xgrid, pi * cos.(pi * xgrid), linestyle=:dash, linewidth=3)
+# f
 
 
 # %%
@@ -102,23 +102,23 @@ shift_dist = (x_hi - x_lo) * Normal(0.5, 0.2) + x_lo
 log_scale_dist = Normal(-1, 1/2)
 sigmoid = x -> 1 / (1 + exp(-x))
 xgrid = -5:0.01:5
-fig = Figure()
-ax = Axis(fig[1,1])
-cols = Makie.wong_colors()
-# x_norm = (xgrid .- x_lo) / (x_hi - x_lo)
-for idx in 1:1000
-    # alpha, beta = exp.(0.5*randn(2))
-    # dd = Beta(alpha, beta)
-    # sample = 1 .- cdf.(dd, x_norm)
-    shift, scale = rand(shift_dist), exp(rand(log_scale_dist))
-    sample = sigmoid.(scale*(xgrid .- shift))
-    sample .-= sample[1]
-    sample ./= sample[end]
-    sample = 1 .- sample
-    if idx % 50 == 0
-        lines!(xgrid, sample, color=(cols[2], 1.), linewidth=3)
-    else
-        lines!(xgrid, sample, color=(cols[1], 0.1), linewidth=3)
-    end
-end
-fig
+# fig = Figure()
+# ax = Axis(fig[1,1])
+# cols = Makie.wong_colors()
+# # x_norm = (xgrid .- x_lo) / (x_hi - x_lo)
+# for idx in 1:1000
+#     # alpha, beta = exp.(0.5*randn(2))
+#     # dd = Beta(alpha, beta)
+#     # sample = 1 .- cdf.(dd, x_norm)
+#     shift, scale = rand(shift_dist), exp(rand(log_scale_dist))
+#     sample = sigmoid.(scale*(xgrid .- shift))
+#     sample .-= sample[1]
+#     sample ./= sample[end]
+#     sample = 1 .- sample
+#     if idx % 50 == 0
+#         lines!(xgrid, sample, color=(cols[2], 1.), linewidth=3)
+#     else
+#         lines!(xgrid, sample, color=(cols[1], 0.1), linewidth=3)
+#     end
+# end
+# fig
