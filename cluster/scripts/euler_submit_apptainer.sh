@@ -4,8 +4,8 @@
 # partition: mit_normal, print logs to `./log` subdir, 64 jobs (do the same thing), 16 cores per job, 10GB RAM minimum.
 #SBATCH -p mit_preemptable
 #SBATCH -o log/euler.log-%A-%a
-#SBATCH -n 2
-#SBATCH -a 1-2
+#SBATCH -n 16
+#SBATCH -a 1-32
 #SBATCH --mem=10G
 #SBATCH --time=10:00:00
 
