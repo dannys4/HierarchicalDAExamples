@@ -461,7 +461,7 @@ try
     X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
     global X_locenkf
-    @warn "Localized EnKF failed for Shu-Osher, $(typeof(e))"
+    @warn "Localized EnKF failed for Sod, $(typeof(e))"
 end
 
 # %%
@@ -558,7 +558,7 @@ try
     X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
     global X_hlocenkf, θ_hlocenkf
-    @warn "GSBL localized EnKF failed for Shu-Osher, $(typeof(e))"
+    @warn "GSBL localized EnKF failed for Sod, $(typeof(e))"
 end
 
 make_figs && with_theme(my_theme) do
@@ -701,7 +701,7 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
 end
-@info "" tuple(metrics_hlocenkf[:crps2_hlocenkf]) tuple(metrics_hlocenkf[:rmse2_hlocenkf]) tuple(metrics_locenkf[:crps2_locenkf]) tuple(metrics_locenkf[:rmse2_locenkf])
+# @info "" tuple(metrics_hlocenkf[:crps2_hlocenkf]) tuple(metrics_hlocenkf[:rmse2_hlocenkf]) tuple(metrics_locenkf[:crps2_locenkf]) tuple(metrics_locenkf[:rmse2_locenkf])
 
 # %%
 jldopen(joinpath(data_path, "sod_" * string(now()) * ".jld2"), "w") do file

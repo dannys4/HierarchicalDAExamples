@@ -1,4 +1,1 @@
-*.sh
-!ex_submit_*.sh
-!ex_command_*.sh
 .bash_history
