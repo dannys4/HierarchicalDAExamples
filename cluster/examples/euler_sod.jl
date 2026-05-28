@@ -96,22 +96,20 @@ using Pkg
 Pkg.activate(proj_path)
 
 # %%
-begin # Execute all loads as part of one expr
-    using Trixi
-    using StaticArrays
-    using LinearAlgebra
-    using OrdinaryDiffEq
-    using HierarchicalDA
-    using HierarchicalDA: initial_condition_sod
-    using LinearMaps
-    using TransportBasedInference2
-    using Distributions
-    using SparseArrays
-    using JLD2
-    using Dates
-    using Random
-    make_figs && using CairoMakie
-end
+using Trixi
+using StaticArrays
+using LinearAlgebra
+using OrdinaryDiffEq
+using HierarchicalDA
+using HierarchicalDA: initial_condition_sod
+using LinearMaps
+using TransportBasedInference2
+using Distributions
+using SparseArrays
+using JLD2
+using Dates
+using Random
+make_figs && using CairoMakie
 
 # %%
 make_figs && (my_theme = theme_minimal())
