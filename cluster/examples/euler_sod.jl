@@ -23,8 +23,8 @@ data_path = joinpath(@__DIR__, "data")
 make_figs = false
 random_seed = rand(UInt)
 
-proj_path = joinpath(@__DIR__, "../..")
-make_figs = true
+# proj_path = joinpath(@__DIR__, "../..")
+# make_figs = true
 
 # %% [markdown]
 # ### Data generating parameters
@@ -451,12 +451,12 @@ locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=false)
 
 # %%
 Trixi.TrixiBase.disable_debug_timings()
-X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, ode_transforms, cfl)
+# X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, ode_transforms, cfl)
 
 # %%
 local X_locenkf
 @info "Performing EnKF..."
-false && try
+try
     global X_locenkf
     X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
@@ -545,15 +545,15 @@ hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space,
 
 # %%
 local X_hlocenkf, θ_hlocenkf
-@info "Performing GSBL EnKF..."
-T_hlocenkf = Tf
-start_hlocenkf = time()
-X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl, ode_transforms)
-hloc_elaps = time() - start_hlocenkf
-@info "GSBL EnKF Took $(hloc_elaps)s"
+# @info "Performing GSBL EnKF..."
+# T_hlocenkf = Tf
+# start_hlocenkf = time()
+# X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl, ode_transforms)
+# hloc_elaps = time() - start_hlocenkf
+# @info "GSBL EnKF Took $(hloc_elaps)s"
 
 # %%
-false && try
+try
     global X_hlocenkf, θ_hlocenkf
     X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
@@ -673,7 +673,7 @@ function derivative_rmse(diff_op, Nvar, quad_wts, truth, ens)
 end
 
 # %%
-start_time = 5
+start_time = 1
 for alg_name in ["locenkf", "hlocenkf"]
     # Error metrics
     metric_sym = Symbol("metrics_$alg_name")
