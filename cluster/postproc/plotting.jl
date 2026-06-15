@@ -22,7 +22,7 @@ using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie
 
 # %%
 data_path = joinpath(@__DIR__, "data")
-example_name = "shu_osher"
+example_name = "sod"
 filename = example_name * "_df.jld2"
 
 # %%
@@ -173,3 +173,23 @@ with_theme(theme_latexfonts(), Axis=(
 end
 
 # %%
+
+with_theme(theme_latexfonts()) do
+    fig = Figure()
+    ax = Axis(fig[1,1])
+    df = df_cut
+    group_col = :algorithm
+    x_col = :Ne
+    y_col = :crps2
+    n_group = length(unique(df[!,group_col]))
+    GROUP_INC = 5
+    JITTER = 0.5
+    for (j,gdf) in enumerate(groupby(df, group_col))
+        x_inc = (j + 1 - (n_group÷2))/n_group
+        x = gdf[!,x_col] + JITTER * randn(length(gdf[!,x_col])) .+ GROUP_INC * x_inc
+        y = gdf[!,y_col]
+        scatter!(ax, x, map(x->x[3],y), label=first(gdf[!,group_col]), markersize=18)
+    end
+    axislegend()
+    fig
+end

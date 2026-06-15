@@ -95,7 +95,10 @@ function process_file(file::JLD2.JLDFile,
             row_alg = Pair{Symbol,AcceptableType}[:id=>uuid, :algorithm=>metric_key]
             for metric in keys(metric_val)
                 metric_name = split(metric, "_")[1] # Some things are (metric)_(alg_name)
-                push!(row_alg, Symbol(metric_name) => metric_val[metric])
+                @info "" metric_name metric_val[metric]
+                if isa(metric_val[metric], AcceptableType)
+                    push!(row_alg, Symbol(metric_name) => metric_val[metric])
+                end
             end
             push!(alg_rows, row_alg)
         else
