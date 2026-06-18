@@ -22,7 +22,7 @@ using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie
 
 # %%
 data_path = joinpath(@__DIR__, "data")
-example_name = "sod"
+example_name = "sod_617"
 filename = example_name * "_df.jld2"
 
 # %%
@@ -121,59 +121,59 @@ function plot_convergence!(ax, df, fixed_key, fixed_val, x_axis, y_axis, marker_
 end
 
 # %%
-fixed_key = :Ne
-x_axis = :sigma_x_filter
-y_axis = :mass_err
-marker_diffs = :delta_y
-line_style = :algorithm
+begin
+    fixed_key = :Ne
+    x_axis = :sigma_x_filter
+    y_axis = :mass_err
+    marker_diffs = :delta_y
+    line_style = :algorithm
 
-fixed_vals = filter(val -> sum(df_cut[!, fixed_key] .== val) > 50, unique(df_cut[!, fixed_key]))
-fixed_val = fixed_vals[2]
-n_row = floor(Int, sqrt(length(fixed_vals)))
-fixed_val_pos = [val => (((idx - 1) ÷ n_row) + 1, mod1(idx, n_row)) for (idx, val) in enumerate(fixed_vals)]
-function get_ylabel(y_axis)
-    metric = match(r"^[a-z]*", string(y_axis)).match
-    upper_fcn = metric in ["crps", "rmse"] ? uppercase : uppercasefirst
-    upper_fcn(metric) * ", log-scale"
+    fixed_vals = filter(val -> sum(df_cut[!, fixed_key] .== val) > 50, unique(df_cut[!, fixed_key]))
+    fixed_val = fixed_vals[2]
+    n_row = floor(Int, sqrt(length(fixed_vals)))
+    fixed_val_pos = [val => (((idx - 1) ÷ n_row) + 1, mod1(idx, n_row)) for (idx, val) in enumerate(fixed_vals)]
+    function get_ylabel(y_axis)
+        metric = match(r"^[a-z]*", string(y_axis)).match
+        upper_fcn = metric in ["crps", "rmse"] ? uppercase : uppercasefirst
+        upper_fcn(metric) * ", log-scale"
+    end
+
+    xticks = [(val, string(val)) for val in [0.01, 0.025, 0.05, 0.1]]
+    xminorticks = 0.01 * (1:0.5:10)
+    with_theme(theme_latexfonts(), Axis=(
+        aspect=1, xlabel=L"$\sigma_x$, log-scale", ylabel=get_ylabel(y_axis),
+        xscale=log10, yscale=log10,
+        xticks=first.(xticks),
+        xticklabels=last.(xticks),
+        xminorticks=xminorticks, xminorticksvisible=true)) do
+
+        fig = Figure(size=(800, 900))
+        gl_plot = fig[1:2, 1:2] = GridLayout()
+        gl_legend = fig[3, 1:2] = GridLayout()
+        # ax = Axis(fig[1, 1], aspect=1., xlabel=string(x_axis), ylabel=string(y_axis), title="$fixed_key = $fixed_val")
+        plots_v = labels_v = nothing
+        for (fixed_val, ax_pos) in fixed_val_pos
+            ax = Axis(gl_plot[ax_pos...], title="Ensemble size $fixed_val")
+            ax.xminorticks = xminorticks
+            plots_v, labels_v = plot_convergence!(ax, df_cut, fixed_key, fixed_val, x_axis, y_axis, marker_diffs, line_style)
+        end
+        function proc_label(label)
+            _, _, delta, alg = split(label)
+            alg_name = alg == "locenkf" ? "EnKF" : "GSBL"
+            delta = delta[1:end-1]
+            L"%$alg_name, $\Delta y$ = %$delta"
+        end
+        leg = Legend(
+            gl_legend[1, 1:2], plots_v, proc_label.(labels_v),
+            patchsize=(50, 20), orientation=:horizontal)
+        leg.nbanks = 2
+        fig_name = join(vcat(split(filename, "_")[1:end-1], string(y_axis), "convergence.pdf"), "_")
+        save(joinpath(@__DIR__, "figs", fig_name), fig)
+        fig
+    end
 end
 
 # %%
-xticks = [(val, string(val)) for val in [0.01, 0.025, 0.05, 0.1]]
-xminorticks = 0.01 * (1:0.5:10)
-with_theme(theme_latexfonts(), Axis=(
-    aspect=1, xlabel=L"$\sigma_x$, log-scale", ylabel=get_ylabel(y_axis),
-    xscale=log10, yscale=log10,
-    xticks=first.(xticks),
-    xticklabels=last.(xticks),
-    xminorticks=xminorticks, xminorticksvisible=true)) do
-
-    fig = Figure(size=(800, 900))
-    gl_plot = fig[1:2, 1:2] = GridLayout()
-    gl_legend = fig[3, 1:2] = GridLayout()
-    # ax = Axis(fig[1, 1], aspect=1., xlabel=string(x_axis), ylabel=string(y_axis), title="$fixed_key = $fixed_val")
-    plots_v = labels_v = nothing
-    for (fixed_val, ax_pos) in fixed_val_pos
-        ax = Axis(gl_plot[ax_pos...], title="Ensemble size $fixed_val")
-        ax.xminorticks = xminorticks
-        plots_v, labels_v = plot_convergence!(ax, df_cut, fixed_key, fixed_val, x_axis, y_axis, marker_diffs, line_style)
-    end
-    function proc_label(label)
-        _, _, delta, alg = split(label)
-        alg_name = alg == "locenkf" ? "EnKF" : "GSBL"
-        delta = delta[1:end-1]
-        L"%$alg_name, $\Delta y$ = %$delta"
-    end
-    leg = Legend(
-        gl_legend[1, 1:2], plots_v, proc_label.(labels_v),
-        patchsize=(50, 20), orientation=:horizontal)
-    leg.nbanks = 2
-    fig_name = join(vcat(split(filename, "_")[1:end-1], string(y_axis), "convergence.pdf"), "_")
-    save(joinpath(@__DIR__, "figs", fig_name), fig)
-    fig
-end
-
-# %%
-
 with_theme(theme_latexfonts()) do
     fig = Figure()
     ax = Axis(fig[1,1])

@@ -443,14 +443,6 @@ sys_y = ObsSystem(H, Cϵ, CX)
 filter_inflation = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
-# function filtering_fcn!(x)
-#     pressure = @view x[idxp]
-#     density = @view x[idxρ]
-#     pressure .= max.(pressure, (1e-6,))
-#     density .= max.(density, (1e-6,))
-#     nothing
-# end
-
 locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=false)
 
 # %%
@@ -481,6 +473,7 @@ sqrt_quad_wts = kron(sqrt.(vec(sys_euler.mesh.md.wJq)), ones(Nvar))
 diff_map = DGMultiDiff1D(sys_euler, false)
 grid_sz = sys_euler.mesh.md.J[1]
 diff_mat = Diagonal(sqrt_quad_wts) * sparse(diff_map * diff_map)
+# diff_mat = sparse(diff_map * diff_map)
 edge_cutoff = 0
 # S_out_idx = (Nvar * (edge_cutoff+1)):(Nvar * ((size(diff_mat, 1) ÷ Nvar) - edge_cutoff))
 S = LinearMap(diff_mat)
@@ -511,7 +504,7 @@ idxpθ_θgrid = 3 * ((1:length(θgrid)) .- 1) .+ 3
 
 # %%
 # Selection of hyper-prior parameters
-hyperprior_idx = 1
+hyperprior_idx = 4
 # power parameter
 r_range = [1.0, 0.5, -0.5, -1.0];
 r_GSBL = r_range[hyperprior_idx] # select parameter
@@ -523,9 +516,22 @@ beta_shift = is_theta_shared ? Ne : 1
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
-# r_GSBL = -1.5
-ϑ_GSBL = 1e-2
+r_GSBL = 0.5
+β_GSBL = 0.5
+ϑ_GSBL = 1e-4
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure()
+    ax = Axis(fig[1,1])
+    theta_grid = 1e-6:1e-5:1e-1
+    for beta in [0.5, 1.0, 1.5, 2.0, 2.5, 3, 3.5, 4.0]
+        lines!(theta_grid, logpdf(GeneralizedGamma(0.5, beta, 1e-4), theta_grid), label=string(beta))
+    end
+    axislegend()
+    fig
+end
 
 # %%
 theta_init_vec = fill(theta_init, Ns)
@@ -542,8 +548,8 @@ end
 
 # %%
 forecast_scale_gsbl = 1
-Lrad_gsbl = 0.5Lrad #4maximum(diff(xgrid))
-Niter = 5
+Lrad_gsbl = Lrad #4maximum(diff(xgrid))
+Niter = 2
 Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl; Nvar, symm_kernel=true, is_sparse=false)
 hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isiterative, isfiltered=false, cg_tol=1e-3)
 
@@ -677,7 +683,7 @@ function derivative_rmse(diff_op, Nvar, quad_wts, truth, ens)
 end
 
 # %%
-start_time = 5
+start_time = 1
 for alg_name in ["locenkf", "hlocenkf"]
     # Error metrics
     metric_sym = Symbol("metrics_$alg_name")
@@ -706,6 +712,7 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict[:tv_norm] = tv_alg
 end
 @info "" tuple(metrics_hlocenkf[:crps2_hlocenkf]) tuple(metrics_hlocenkf[:rmse2_hlocenkf]) tuple(metrics_locenkf[:crps2_locenkf]) tuple(metrics_locenkf[:rmse2_locenkf])
+@info "" tuple(metrics_hlocenkf[:crps2_hlocenkf] ./ metrics_locenkf[:crps2_locenkf])
 # entropy_hlocenkf, entropy_locenkf = map(x->x[end],), map(x->x[end],metrics_locenkf[:entropy])
 # @info "" sum(abs2, reduce(hcat, metrics_hlocenkf[:entropy][2:end])' .- entropy_data)
 # @info "" sum(abs2, reduce(hcat,  metrics_locenkf[:entropy][2:end])' .- entropy_data)
