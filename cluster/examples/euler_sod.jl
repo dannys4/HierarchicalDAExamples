@@ -23,8 +23,8 @@ data_path = joinpath(@__DIR__, "data")
 make_figs = false
 random_seed = rand(UInt)
 
-# proj_path = joinpath(@__DIR__, "../..")
-# make_figs = true
+proj_path = joinpath(@__DIR__, "../..")
+make_figs = true
 
 # %% [markdown]
 # ### Data generating parameters
@@ -40,7 +40,7 @@ delta_t_obs = 0.025
 t0 = 0.0
 tf = 0.2
 
-delta_y = 30
+delta_y = 10
 density_thresh, pressure_thresh = 5e-5, 5e-5
 sigma_y = 0.05
 sigma_x_data = 0.0
@@ -54,8 +54,8 @@ alpha_k_f0, L_f0 = 1.0, 10.0
 initial_noise_perturb = 0.075
 sigma_x_filter = 0.0
 beta_infl = 1.02
-# wave_speed = 13.912
-Lrad = 0.025 #4 * wave_speed * delta_t_obs
+wave_speed = 13.912
+Lrad = 0.1 # wave_speed * delta_t_obs
 Ne = 40
 cfl = 0.4
 
@@ -171,7 +171,10 @@ Tf = round(Int, (tf - t0) / delta_t_obs)
 
 # %%
 # Gives me initial condition in cons
-x0_quad = map(x -> initial_condition_sod(x, 0., sys_euler.equations), sys_euler.mesh.md.xq)
+problem_setup = SodShock()
+x0_quad = map(x -> initial_condition_sod(x, 0., sys_euler.equations, problem_setup), sys_euler.mesh.md.xq)
+true_soln_sod!(u, x, t) = sod_solution!(u, x, t, problem_setup)
+
 # x0 is in prims
 x0 = sol2vec(x0_quad, sys_euler.equations; g=(x,eqns)->ode_transforms.from_solver_transform(cons2prim(x, eqns)))
 
@@ -202,7 +205,7 @@ ode_solver = SSPRK43(stage_limiter!)
 
 # %%
 @info "Generating data..."
-data = generate_data_trixi(model, x0, Tf, sys_euler; ode_solver, ode_transforms, cfl)
+data = generate_data_trixi(model, x0, Tf, sys_euler; ode_transforms, (true_soln!) = true_soln_sod!)
 
 # %%
 false && make_figs && with_theme(my_theme) do
@@ -228,7 +231,7 @@ false && make_figs && with_theme(my_theme) do
     display(fig)
 end;
 
-x_plot, data_plot = get_plot_ensemble(data.xt, sys_euler; ode_transforms)
+x_plot, data_plot = get_plot_ensemble(data.xt, sys_euler; use_cons=false, ode_transforms)
 
 (false && make_figs) && with_theme(my_theme) do
     N_T = length(data.tt)
@@ -257,6 +260,7 @@ x_plot, data_plot = get_plot_ensemble(data.xt, sys_euler; ode_transforms)
 end
 
 make_figs && with_theme(my_theme) do
+    # x_plot, data_plot = xgrid, permutedims(reshape(data.xt, 3, length(xgrid), :), (2,1,3))
     fig = Figure(size=(2100, 700))
     tsnap2 = size(data_plot, 3)
     tsnap2_val = data.tt[tsnap2]
@@ -437,24 +441,16 @@ sys_y = ObsSystem(H, Cϵ, CX)
 filter_inflation = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
-# function filtering_fcn!(x)
-#     pressure = @view x[idxp]
-#     density = @view x[idxρ]
-#     pressure .= max.(pressure, (1e-6,))
-#     density .= max.(density, (1e-6,))
-#     nothing
-# end
-
 locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs, isfiltered=false)
 
 # %%
 Trixi.TrixiBase.disable_debug_timings()
-# X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, ode_transforms, cfl)
+X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, ode_transforms, cfl)
 
 # %%
 local X_locenkf
 @info "Performing EnKF..."
-try
+false && try
     global X_locenkf
     X_locenkf = seqassim_trixi(data, Tf, filter_inflation, locenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
@@ -474,7 +470,8 @@ end
 sqrt_quad_wts = kron(sqrt.(vec(sys_euler.mesh.md.wJq)), ones(Nvar))
 diff_map = DGMultiDiff1D(sys_euler, false)
 grid_sz = sys_euler.mesh.md.J[1]
-diff_mat = Diagonal(sqrt_quad_wts) * sparse(diff_map * diff_map)
+diff_mat = Diagonal(sqrt_quad_wts) * sparse(diff_map * (I + diff_map * (I + diff_map)))/3
+# diff_mat = sparse(diff_map * diff_map)
 edge_cutoff = 0
 # S_out_idx = (Nvar * (edge_cutoff+1)):(Nvar * ((size(diff_mat, 1) ÷ Nvar) - edge_cutoff))
 S = LinearMap(diff_mat)
@@ -517,9 +514,23 @@ beta_shift = is_theta_shared ? Ne : 1
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
-r_GSBL = -1.5
-ϑ_GSBL = 1e-4
+r_GSBL = 0.5
+β_GSBL = 0.05
+ϑ_GSBL = 1e-3
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
+
+make_figs && with_theme(my_theme) do
+    R = r_GSBL
+    VARTHETA = ϑ_GSBL
+    fig = Figure()
+    ax = Axis(fig[1,1], xscale=log10)
+    theta_grid = 1e-5:1e-5:1e-3
+    for beta in [0.05, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 3, 3.5, 4.0]
+        lines!(theta_grid, logpdf(GeneralizedGamma(R, beta, VARTHETA), theta_grid), label=string(beta))
+    end
+    # axislegend()
+    fig
+end
 
 # %%
 theta_init_vec = fill(theta_init, Ns)
@@ -535,23 +546,23 @@ else
 end
 
 # %%
-forecast_scale_gsbl = 1
+forecast_scale_gsbl = 1 #0.25
 Lrad_gsbl = Lrad #4maximum(diff(xgrid))
-Niter = 5
+Niter = 2
 Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl; Nvar, symm_kernel=true, is_sparse=false)
 hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init, isiterative, isfiltered=false, cg_tol=1e-3)
 
 # %%
 local X_hlocenkf, θ_hlocenkf
-# @info "Performing GSBL EnKF..."
-# T_hlocenkf = Tf
-# start_hlocenkf = time()
-# X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl, ode_transforms)
-# hloc_elaps = time() - start_hlocenkf
-# @info "GSBL EnKF Took $(hloc_elaps)s"
+@info "Performing GSBL EnKF..."
+T_hlocenkf = 3
+start_hlocenkf = time()
+X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl, ode_transforms)
+hloc_elaps = time() - start_hlocenkf
+@info "GSBL EnKF Took $(hloc_elaps)s"
 
 # %%
-try
+false && try
     global X_hlocenkf, θ_hlocenkf
     X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, Tf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl)
 catch e
@@ -700,6 +711,10 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict[:tv_norm] = tv_alg
 end
 # @info "" tuple(metrics_hlocenkf[:crps2_hlocenkf]) tuple(metrics_hlocenkf[:rmse2_hlocenkf]) tuple(metrics_locenkf[:crps2_locenkf]) tuple(metrics_locenkf[:rmse2_locenkf])
+# @info "" tuple(metrics_hlocenkf[:crps2_hlocenkf] ./ metrics_locenkf[:crps2_locenkf])
+# entropy_hlocenkf, entropy_locenkf = map(x->x[end],), map(x->x[end],metrics_locenkf[:entropy])
+# @info "" sum(abs2, reduce(hcat, metrics_hlocenkf[:entropy][2:end])' .- entropy_data)
+# @info "" sum(abs2, reduce(hcat,  metrics_locenkf[:entropy][2:end])' .- entropy_data)
 
 # %%
 jldopen(joinpath(data_path, "sod_" * string(now()) * ".jld2"), "w") do file
