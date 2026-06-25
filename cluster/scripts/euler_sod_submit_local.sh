@@ -8,8 +8,8 @@
 #SBATCH -a 1-12
 #SBATCH --mem=10G
 
-export IN_DATA_PATH=/home/dannys4/git-repos/HierarchicalDAExamples/cluster/scripts/data
+export IN_DATA_PATH=$PWD/cluster/scripts/data
 export PROJ_PATH=$PWD/../..
-export RUN_CMD=./run_example
+export RUN_CMD=$PWD/run_example
 
 ./euler_sod.sh
