@@ -40,7 +40,7 @@ delta_t_obs = 0.025
 t0 = 0.0
 tf = 0.2
 
-delta_y = 20
+delta_y = 10
 density_thresh, pressure_thresh = 5e-5, 5e-5
 sigma_y = 0.05
 sigma_x_data = 0.0
@@ -472,7 +472,7 @@ end
 sqrt_quad_wts = kron(sqrt.(vec(sys_euler.mesh.md.wJq)), ones(Nvar))
 diff_map = DGMultiDiff1D(sys_euler, false)
 grid_sz = sys_euler.mesh.md.J[1]
-diff_mat = Diagonal(sqrt_quad_wts) * sparse(diff_map * diff_map)
+diff_mat = Diagonal(sqrt_quad_wts) * sparse(diff_map * (I + diff_map * (I + diff_map)))/3
 # diff_mat = sparse(diff_map * diff_map)
 edge_cutoff = 0
 # S_out_idx = (Nvar * (edge_cutoff+1)):(Nvar * ((size(diff_mat, 1) ÷ Nvar) - edge_cutoff))
@@ -517,19 +517,20 @@ beta_shift = is_theta_shared ? Ne : 1
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
 r_GSBL = 0.5
-β_GSBL = 0.5
-ϑ_GSBL = 1e-4
+β_GSBL = 0.05
+ϑ_GSBL = 1e-3
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
-# %%
 make_figs && with_theme(my_theme) do
+    R = r_GSBL
+    VARTHETA = ϑ_GSBL
     fig = Figure()
-    ax = Axis(fig[1,1])
-    theta_grid = 1e-6:1e-5:1e-1
-    for beta in [0.5, 1.0, 1.5, 2.0, 2.5, 3, 3.5, 4.0]
-        lines!(theta_grid, logpdf(GeneralizedGamma(0.5, beta, 1e-4), theta_grid), label=string(beta))
+    ax = Axis(fig[1,1], xscale=log10)
+    theta_grid = 1e-5:1e-5:1e-3
+    for beta in [0.05, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 3, 3.5, 4.0]
+        lines!(theta_grid, logpdf(GeneralizedGamma(R, beta, VARTHETA), theta_grid), label=string(beta))
     end
-    axislegend()
+    # axislegend()
     fig
 end
 
@@ -547,7 +548,7 @@ else
 end
 
 # %%
-forecast_scale_gsbl = 1
+forecast_scale_gsbl = 1 #0.25
 Lrad_gsbl = Lrad #4maximum(diff(xgrid))
 Niter = 2
 Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl; Nvar, symm_kernel=true, is_sparse=false)
@@ -556,7 +557,7 @@ hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space,
 # %%
 local X_hlocenkf, θ_hlocenkf
 @info "Performing GSBL EnKF..."
-T_hlocenkf = Tf
+T_hlocenkf = 3
 start_hlocenkf = time()
 X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl, ode_transforms)
 hloc_elaps = time() - start_hlocenkf

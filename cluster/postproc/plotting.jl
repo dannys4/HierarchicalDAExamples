@@ -22,7 +22,7 @@ using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie
 
 # %%
 data_path = joinpath(@__DIR__, "data")
-example_name = "sod_617"
+example_name = "sod_618"
 filename = example_name * "_df.jld2"
 
 # %%
@@ -33,7 +33,7 @@ df = leftjoin(df_algs, df_params, on=:id)
 leftjoin!(df, df_truth, on=:id)
 
 ##
-with_theme(theme_minimal(), linewidth=3) do
+false && with_theme(theme_minimal(), linewidth=3) do
     cols = Makie.wong_colors()
     for (truth_sym, qoi_sym, ylab) in [(:true_tv_norm, :tv, "TV norm"), (:true_mass, :mass, "Mass"), (:true_entropy, :entropy, "Entropy")]
         qoi_true = df[1, truth_sym]
@@ -121,7 +121,7 @@ function plot_convergence!(ax, df, fixed_key, fixed_val, x_axis, y_axis, marker_
 end
 
 # %%
-begin
+false && begin
     fixed_key = :Ne
     x_axis = :sigma_x_filter
     y_axis = :mass_err
@@ -174,22 +174,46 @@ begin
 end
 
 # %%
-with_theme(theme_latexfonts()) do
-    fig = Figure()
-    ax = Axis(fig[1,1])
+with_theme(merge(theme_minimal(),theme_latexfonts()), Axis=(
+    xlabel="Ensemble Size, log-scale", xscale = log10,
+    xticks=[25, 38, 56, 84, 127]
+)) do
     df = df_cut
     group_col = :algorithm
     x_col = :Ne
-    y_col = :crps2
-    n_group = length(unique(df[!,group_col]))
-    GROUP_INC = 5
-    JITTER = 0.5
-    for (j,gdf) in enumerate(groupby(df, group_col))
-        x_inc = (j + 1 - (n_group÷2))/n_group
-        x = gdf[!,x_col] + JITTER * randn(length(gdf[!,x_col])) .+ GROUP_INC * x_inc
-        y = gdf[!,y_col]
-        scatter!(ax, x, map(x->x[3],y), label=first(gdf[!,group_col]), markersize=18)
+    y_col = :rmse2
+    groups = unique(df[!,group_col])
+    n_group = length(groups)
+    abscessa_vals = Int.(sort(unique(df[!,x_col])))
+    GROUP_INC = 0.15
+    JITTER = 0.01
+    alg_names = Dict(["locenkf" => "EnKF", "hlocenkf" => "GSBL-EnKF"])
+    alg_markers = Dict(["locenkf" => :circle, "hlocenkf" => :+])
+    fig = Figure(size=(1000,300))
+    for state in 1:3
+        ax = Axis(fig[1,state], ylabel= state == 1 ? "RMSE" : "")
+        xlims!(ax, (20, 150))
+        for (j,gdf) in enumerate(groupby(df, group_col))
+            x_inc = 2*(j - ((n_group + 1)÷2))/n_group - 0.5
+            group_inc = GROUP_INC * gdf[!, x_col] * x_inc
+            jitter = JITTER * randn(length(gdf[!,x_col])) .* gdf[!, x_col]
+            x_jit = gdf[!,x_col] + jitter + group_inc
+            y = map(x->x[state], gdf[!,y_col])
+            alg = first(gdf[!,group_col])
+            scatter!(ax, x_jit, y, label=alg_names[alg], markersize=18, marker=alg_markers[alg], alpha=0.6)
+        end
+        for (j,gdf) in enumerate(groupby(df, group_col))
+            x_inc = 2*(j - ((n_group + 1)÷2))/n_group - 0.5
+            # group_inc = GROUP_INC * ab * x_inc
+            y = map(x->x[state], gdf[!,y_col])
+            med_error = [median(y[gdf[!,x_col] .== n]) for n in abscessa_vals]
+            alg = first(gdf[!,group_col])
+            scatterlines!(ax, abscessa_vals .* (1 .+ GROUP_INC * x_inc), med_error, linewidth=3, markersize=18, strokecolor=:black, strokewidth=3, marker=alg_markers[alg])
+        end
+        if state == 3
+            axislegend()
+        end
     end
-    axislegend()
+    save(joinpath(@__DIR__, "figs", "rmse_sod.pdf"), fig)
     fig
 end
