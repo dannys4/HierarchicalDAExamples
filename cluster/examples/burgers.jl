@@ -20,8 +20,8 @@ data_path = joinpath(@__DIR__, "data")
 proj_path = joinpath(@__DIR__, "..")
 random_seed = rand(UInt)
 
-# proj_path = joinpath(@__DIR__, "../..")
-# make_figs = true
+proj_path = joinpath(@__DIR__, "../..")
+make_figs = true
 
 # %%
 # Problem setup params
@@ -39,7 +39,7 @@ t0, tf = 0.0, 2.0 # Start and end time
 # %%
 # Important parameters for data assimilation
 Ne = 40 # Ensemble size
-Lrad = 1.2 * delta_t_obs # Localization radius
+Lrad = 0.6 * delta_t_obs # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0, L_f0 = 0.7, 1.0 # Parameters for initial condition
@@ -186,7 +186,9 @@ make_figs && with_theme(my_theme) do
 end
 
 # %%
-Cϵ = LinearMap(ϵy.σ, Ny)
+Cϵ = LinearMap(get_cov(ϵy, 0.))
+# This CX is replaced with the estimated state cov at each step
+CX = LocalizedEmpiricalCov(X, Loc)
 sys_y = ObsSystem(H, Cϵ);
 
 # %%
@@ -195,7 +197,7 @@ idx = vcat(collect(1:length(yidx))', collect(yidx)')
 
 # Create Localization structure
 metric = PeriodicMetric(-1, 1)
-Loc = Localization(xgrid, Lrad, metric, symm_kernel=true, is_sparse=true)
+Loc = Localization(xgrid, Lrad, metric, is_sparse=true)
 
 # beta_infl, sigma_x_filter = 1.04, 0.1
 ϵxbeta_filter = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
@@ -220,7 +222,10 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 ϑ_range = [5 * 10^(-2), 5.9323 * 10^(-3), 1.2583 * 10^(-3), 1.2308 * 10^(-4)];
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
-ϑ_GSBL = 5e-2
+
+r_GSBL = 0.5
+β_GSBL = 0.05
+ϑ_GSBL = 1e-3
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
@@ -237,12 +242,12 @@ Cθ = LinearMap(Diagonal(theta_init_vec))
 sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
-forecast_scale_gsbl = 40
-Lrad_gsbl = 0.5Lrad
-Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true)
+forecast_scale_gsbl = 5
+Lrad_gsbl = Lrad
+Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, is_sparse=true)
 
 # %%
-Niter = 20
+Niter = 2
 hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter, θinit=theta_init)
 
 # %%
@@ -504,39 +509,39 @@ make_figs && with_theme(my_theme) do
     display(anim)
 end
 
-# %%
-make_figs && with_theme(my_theme) do
-    mean_locenkf = mean_hist(X_locenkf)[:, 1:end-1]
-    mean_hlocenkf = mean_hist(X_hlocenkf)[:, 1:end-1]
-    _, mean_locenkf = get_plot_ensemble(mean_locenkf, sys_burgers)
-    _, mean_hlocenkf = get_plot_ensemble(mean_hlocenkf, sys_burgers)
-    mean_locenkf = mean_locenkf[:, 1, :]
-    mean_hlocenkf = mean_hlocenkf[:, 1, :]
-    heatmap_locenkf = interp_columns(mean_locenkf, N_interp)
-    heatmap_hlocenkf = interp_columns(mean_hlocenkf, N_interp)
-    colorrange = extrema(reduce(vcat, collect(extrema(x)) for x in [heatmap_data, heatmap_locenkf, heatmap_hlocenkf]))
-    fig = Figure(fontsize=20, size=(1200, 400))
-    ax1 = Axis(fig[1, 1],
-        title=L"\text{Truth}",
-        xlabel=L"t",
-        ylabel=L"x",)
-    ax2 = Axis(fig[1, 2],
-        title=L"\text{EnKF}",
-        xlabel=L"t",
-        ylabel=L"x",)
-    ax3 = Axis(fig[1, 3],
-        title=L"\text{GSBL EnKF}",
-        xlabel=L"t",
-        ylabel=L"x",)
-    tgrid_plot = range(t0, tf, length=size(heatmap_data, 1))
-    h1 = heatmap!(ax1, tgrid_plot, x_plot, heatmap_data; colorrange)
-    heatmap!(ax2, tgrid_plot, x_plot, heatmap_locenkf; colorrange)
-    heatmap!(ax3, tgrid_plot, x_plot, heatmap_hlocenkf; colorrange)
-    Colorbar(fig[1, 4], label=L"u(x, t)"; colorrange)
-    display(fig)
-    save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.pdf"), fig)
-    save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.png"), fig)
-end
+# # %%
+# make_figs && with_theme(my_theme) do
+#     mean_locenkf = mean_hist(X_locenkf)[:, 1:end-1]
+#     mean_hlocenkf = mean_hist(X_hlocenkf)[:, 1:end-1]
+#     _, mean_locenkf = get_plot_ensemble(mean_locenkf, sys_burgers)
+#     _, mean_hlocenkf = get_plot_ensemble(mean_hlocenkf, sys_burgers)
+#     mean_locenkf = mean_locenkf[:, 1, :]
+#     mean_hlocenkf = mean_hlocenkf[:, 1, :]
+#     heatmap_locenkf = interp_columns(mean_locenkf, N_interp)
+#     heatmap_hlocenkf = interp_columns(mean_hlocenkf, N_interp)
+#     colorrange = extrema(reduce(vcat, collect(extrema(x)) for x in [heatmap_data, heatmap_locenkf, heatmap_hlocenkf]))
+#     fig = Figure(fontsize=20, size=(1200, 400))
+#     ax1 = Axis(fig[1, 1],
+#         title=L"\text{Truth}",
+#         xlabel=L"t",
+#         ylabel=L"x",)
+#     ax2 = Axis(fig[1, 2],
+#         title=L"\text{EnKF}",
+#         xlabel=L"t",
+#         ylabel=L"x",)
+#     ax3 = Axis(fig[1, 3],
+#         title=L"\text{GSBL EnKF}",
+#         xlabel=L"t",
+#         ylabel=L"x",)
+#     tgrid_plot = range(t0, tf, length=size(heatmap_data, 1))
+#     h1 = heatmap!(ax1, tgrid_plot, x_plot, heatmap_data; colorrange)
+#     heatmap!(ax2, tgrid_plot, x_plot, heatmap_locenkf; colorrange)
+#     heatmap!(ax3, tgrid_plot, x_plot, heatmap_hlocenkf; colorrange)
+#     Colorbar(fig[1, 4], label=L"u(x, t)"; colorrange)
+#     display(fig)
+#     save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.pdf"), fig)
+#     save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.png"), fig)
+# end
 
 # %%
 make_figs && with_theme(my_theme) do

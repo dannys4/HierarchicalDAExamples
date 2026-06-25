@@ -20,8 +20,8 @@ data_path = joinpath(@__DIR__, "data")
 proj_path = joinpath(@__DIR__, "..")
 random_seed = rand(UInt)
 
-#proj_path = joinpath(@__DIR__, "../..")
-#make_figs = true
+proj_path = joinpath(@__DIR__, "../..")
+make_figs = true
 
 # %%
 # PDE solution parameters
@@ -45,7 +45,7 @@ sigma_y = 0.05
 # %%
 # Important parameters for data assimilation
 Ne = 75 # Ensemble size
-Lrad = delta_t_obs * advection_velocity # Localization radius
+Lrad = 0.5 * delta_t_obs * advection_velocity # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
 alpha_k_f0 = 0.8 # Parameter for initial condition
@@ -83,7 +83,7 @@ end
 
 # %%
 using Pkg
-# Pkg.activate(proj_path)
+Pkg.activate(proj_path)
 @info "Activated project"
 
 # %%
@@ -215,13 +215,14 @@ end
 # Create Localization structure
 # Gxx(i, j) = periodicmetric!(i, j, Nx)
 metric = PeriodicMetric(round.(extrema(xgrid))...)
-Loc = Localization(xgrid, Lrad, metric, symm_kernel=true, is_sparse=true)
+Loc = Localization(xgrid, Lrad, metric, is_sparse=true)
 ϵxβ_enkf = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)
 
 # %%
-Cϵ = LinearMap(ϵy.Σ, Ny)
+Cϵ = LinearMap(get_cov(ϵy, 0.))
 # This CX is replaced with the estimated state cov at each step
-sys_y = ObsSystem(H, Cϵ)
+CX = LocalizedEmpiricalCov(X0, Loc)
+sys_y = ObsSystem(H, Cϵ, CX)
 locenkf = LocEnKF(ϵy, sys_y, Loc, delta_t_dyn, delta_t_obs)
 
 # %%
@@ -243,7 +244,9 @@ r_GSBL = r_range[hyperprior_idx] # select parameter
 ϑ_GSBL = ϑ_range[hyperprior_idx]
 
 # r_GSBL, β_GSBL, ϑ_GSBL = 1., 30., 1e-3
-ϑ_GSBL = 1e-7
+r_GSBL = 0.5
+β_GSBL = 0.05
+ϑ_GSBL = 1e-1
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
 # %%
@@ -264,15 +267,13 @@ sys_ys = ObsConstraintSystem(H, S, Cθ, Cϵ)
 
 # %%
 forecast_scale_gsbl = 20
-Lrad_gsbl = 0.5Lrad
+Lrad_gsbl = Lrad
 # Loc_gsbl = ShockLocalization(PA.P, xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true, is_periodic=true, thresh=0.75)
-Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, symm_kernel=true, is_sparse=true)
+Loc_gsbl = Localization(xgrid, Lrad_gsbl, metric, forecast_scale_gsbl, is_sparse=true)
 
 # %%
-Niter = 10
+Niter = 2
 hlocenkf = HLocEnKF(Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space, delta_t_dyn, delta_t_obs; Niter=Niter, θinit=theta_init)
-
-# %%
 beta_infl_hlocenkf = beta_infl
 ϵxβ_hlocenkf = MultiAddInflation(Nx, beta_infl_hlocenkf, zeros(Nx), sigma_x_filter)
 
