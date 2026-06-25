@@ -10,8 +10,8 @@
 
 # Pathing for commands
 ## local pathing
-export IN_DATA_PATH=$HOME/orcd/pool/HDA/linear_advection
+# export IN_DATA_PATH=$HOME/orcd/pool/HDA/linear_advection
 export PROJ_PATH=$PWD
-export RUN_CMD=./cluster/scripts/run_example
+export RUN_CMD=$PWD/cluster/scripts/run_example
 
 ./cluster/scripts/advection_run.sh
