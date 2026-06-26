@@ -1,4 +1,4 @@
-FROM debian
+FROM debian:bullseye
 
 SHELL ["/bin/bash", "-c"]
 
@@ -40,7 +40,7 @@ RUN echo 'export PATH=${JULIA_BASE_DIR}/julia/bin:$PATH' >> /home/${USERNAME}/.b
 
 RUN JULIA_CPU_TARGET="generic;znver3,clone_all;znver4,base(1)" julia -O3 --threads=auto -e "using Pkg; Pkg.instantiate()"
 RUN JULIA_CPU_TARGET="generic;znver3,clone_all;znver4,base(1)" julia -O3 --threads=auto -e "using Pkg; Pkg.precompile()"
-RUN JULIA_CPU_TARGET="generic;znver3,clone_all;znver4,base(1)" julia -O3 --threads=auto /home/${USERNAME}/test.jl 
+RUN JULIA_CPU_TARGET="generic;znver3,clone_all;znver4,base(1)" julia -O3 --threads=auto /home/${USERNAME}/test.jl
 
 WORKDIR /home/${USERNAME}
 

@@ -1,0 +1,13 @@
+services:
+  hierarchical_data_assimilation:
+    build: .
+    container_name: hierarchical_data_assimilation
+    environment:
+      - PROJ_PATH=${DOCKERENV_PROJ_PATH}
+      - RUN_CMD=${DOCKERENV_RUN_CMD}
+      - IN_DATA_PATH=${DOCKERENV_IN_DATA_PATH}
+    volumes:
+      - ./:/home/jovyan/cluster
+      - ${OUT_DATA_PATH}:/home/jovyan/cluster/${IN_DATA_PATH}
+    working_dir: /home/jovyan/cluster
+    command: ["$EXAMPLE_SCRIPT"]
