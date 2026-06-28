@@ -22,7 +22,7 @@ using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie
 
 # %%
 data_path = joinpath(@__DIR__, "data")
-example_name = "sod_618"
+example_name = "advection_data"
 filename = example_name * "_df.jld2"
 
 # %%
@@ -89,6 +89,14 @@ end
 df_cut = select(df, keep_cols)
 
 # %%
+function get_inner_vector(v::AbstractVector{<:AbstractVector})
+    first(v)
+end
+
+function get_inner_vector(v::AbstractVector)
+    v
+end
+
 function plot_convergence!(ax, df, fixed_key, fixed_val, x_axis, y_axis, marker_diffs, line_style, cols=Makie.wong_colors())
     line_styles = (:dash, :solid, :dot) # Should only need 2
     marker_color = ((:+, cols[1]), (:rect, cols[2]), (:star5, cols[3]))
@@ -102,7 +110,7 @@ function plot_convergence!(ax, df, fixed_key, fixed_val, x_axis, y_axis, marker_
     g_df_filter = groupby(df_filter, [line_style, marker_diffs, x_axis])
     df_filter_metrics = combine(g_df_filter,
         [y_axis] =>
-            ((v,) -> NamedTuple(zip([:lo, :mid, :hi], quantile(map(getindex, v), metric_quantile_levels)))) =>
+            ((v,) -> NamedTuple(zip([:lo, :mid, :hi], quantile(map(u->last(get_inner_vector(u)), v), metric_quantile_levels)))) =>
                 AsTable
     )
     sort!(df_filter_metrics, x_axis)
@@ -126,63 +134,66 @@ function plot_convergence!(ax, df, fixed_key, fixed_val, x_axis, y_axis, marker_
     plots_v, labels_v
 end
 
-# %%
-fixed_key = :Ne
-x_axis = :sigma_y
-y_axis = :crps2
-marker_diffs = :delta_y
-line_style = :algorithm
-
-fixed_vals = filter(val -> sum(df_cut[!, fixed_key] .== val) > 50, unique(df_cut[!, fixed_key]))
-fixed_val = fixed_vals[2]
-n_row = floor(Int, sqrt(length(fixed_vals)) + sqrt(eps()))
-fixed_vals_row = [mod1(idx, n_row) for idx in eachindex(fixed_vals)]
-fixed_vals_col = [((idx - 1) ÷ n_row) + 1 for idx in eachindex(fixed_vals)]
-n_col = maximum(fixed_vals_col)
-
-function get_ylabel(y_axis)
+function get_ylabel(y_axis, is_logscale = true)
     metric = match(r"^[a-z]*", string(y_axis)).match
     upper_fcn = metric in ["crps", "rmse"] ? uppercase : uppercasefirst
-    upper_fcn(metric) * ", log-scale"
+    upper_fcn(metric) * (is_logscale ? ", log-scale" : "")
 end
 
 # %%
-xticks = [(val, string(val)) for val in [0.01, 0.025, 0.05, 0.1]]
-xminorticks = 0.01 * (1:0.5:10)
-with_theme(theme_latexfonts(), figure_padding = 0., Axis=(
-    aspect=1, xlabel=L"$\sigma_y$, log-scale", ylabel=get_ylabel(y_axis),
-    xscale=log10, yscale=log10,
-    xticks=first.(xticks),
-    xticklabels=last.(xticks),
-    xminorticks=xminorticks, xminorticksvisible=true)) do
+begin
+    fixed_key = :Ne
+    x_axis = :sigma_y
+    y_axis = :crps2
+    marker_diffs = :delta_y
+    line_style = :algorithm
 
-    fig = Figure(size=(300*n_col, 300*n_row + 50))
-    gl_plot = fig[1:2, 1:2] = GridLayout()
-    gl_plot_rows = [(gl_plot[j, 1] = GridLayout()) for j in 1:n_row]
-    gl_legend = fig[3, 1:2] = GridLayout()
-    # ax = Axis(fig[1, 1], aspect=1., xlabel=string(x_axis), ylabel=string(y_axis), title="$fixed_key = $fixed_val")
-    plots_v = labels_v = nothing
-    for (idx, val) in enumerate(fixed_vals)
-        row, col = fixed_vals_row[idx], fixed_vals_col[idx]
-        gl_row = gl_plot_rows[row]
-        ax = Axis(gl_row[1, col], title="Ensemble size $val", aspect=1.)
-        ax.xminorticks = xminorticks
-        plots_v, labels_v = plot_convergence!(ax, df_cut, fixed_key, val, x_axis, y_axis, marker_diffs, line_style)
+    fixed_vals = filter(val -> sum(df_cut[!, fixed_key] .== val) > 50, unique(df_cut[!, fixed_key]))
+    fixed_val = fixed_vals[2]
+    n_row = floor(Int, sqrt(length(fixed_vals)) + sqrt(eps()))
+    fixed_vals_row = [mod1(idx, n_row) for idx in eachindex(fixed_vals)]
+    fixed_vals_col = [((idx - 1) ÷ n_row) + 1 for idx in eachindex(fixed_vals)]
+    n_col = maximum(fixed_vals_col)
+
+    xticks = [(val, string(val)) for val in [0.01, 0.025, 0.05, 0.1]]
+    xminorticks = 0.01 * (1:0.5:10)
+    with_theme(theme_latexfonts(), figure_padding = 0., Axis=(
+        aspect=1, xlabel=L"$\sigma_y$, log-scale", ylabel=get_ylabel(y_axis),
+        xscale=log10, yscale=log10,
+        xticks=first.(xticks),
+        xticklabels=last.(xticks),
+        xminorticks=xminorticks, xminorticksvisible=true)) do
+
+        fig = Figure(size=(300*n_col, 300*n_row + 50))
+        gl_plot = fig[1:2, 1:2] = GridLayout()
+        gl_plot_rows = [(gl_plot[j, 1] = GridLayout()) for j in 1:n_row]
+        gl_legend = fig[3, 1:2] = GridLayout()
+        # ax = Axis(fig[1, 1], aspect=1., xlabel=string(x_axis), ylabel=string(y_axis), title="$fixed_key = $fixed_val")
+        plots_v = labels_v = nothing
+        for (idx, val) in enumerate(fixed_vals)
+            row, col = fixed_vals_row[idx], fixed_vals_col[idx]
+            gl_row = gl_plot_rows[row]
+            ax = Axis(gl_row[1, col], title="Ensemble size $val", aspect=1.)
+            ax.xminorticks = xminorticks
+            plots_v, labels_v = plot_convergence!(ax, df_cut, fixed_key, val, x_axis, y_axis, marker_diffs, line_style)
+        end
     end
 end
 
 # %%
-false && begin
+begin
     fixed_key = :Ne
     x_axis = :sigma_x_filter
-    y_axis = :mass_err
+    y_axis = :crps2
     marker_diffs = :delta_y
     line_style = :algorithm
 
     fixed_vals = filter(val -> sum(df_cut[!, fixed_key] .== val) > 50, unique(df_cut[!, fixed_key]))
     fixed_val = fixed_vals[2]
     n_row = floor(Int, sqrt(length(fixed_vals)))
-    fixed_val_pos = [val => (((idx - 1) ÷ n_row) + 1, mod1(idx, n_row)) for (idx, val) in enumerate(fixed_vals)]
+    n_col = ceil(Int, length(fixed_vals) / n_row)
+    n_row, n_col = minmax(n_row, n_col)
+    fixed_val_pos = [val => (mod1(idx, n_row), ((idx - 1) ÷ n_row) + 1) for (idx, val) in enumerate(fixed_vals)]
     function get_ylabel(y_axis)
         metric = match(r"^[a-z]*", string(y_axis)).match
         upper_fcn = metric in ["crps", "rmse"] ? uppercase : uppercasefirst
@@ -198,9 +209,9 @@ false && begin
         xticklabels=last.(xticks),
         xminorticks=xminorticks, xminorticksvisible=true)) do
 
-        fig = Figure(size=(800, 900))
-        gl_plot = fig[1:2, 1:2] = GridLayout()
-        gl_legend = fig[3, 1:2] = GridLayout()
+        fig = Figure(size=(900, 375))
+        gl_plot = fig[1, 1] = GridLayout()
+        gl_legend = fig[2, 1] = GridLayout()
         # ax = Axis(fig[1, 1], aspect=1., xlabel=string(x_axis), ylabel=string(y_axis), title="$fixed_key = $fixed_val")
         plots_v = labels_v = nothing
         for (fixed_val, ax_pos) in fixed_val_pos
@@ -266,5 +277,55 @@ with_theme(merge(theme_minimal(),theme_latexfonts()), Axis=(
         end
     end
     save(joinpath(@__DIR__, "figs", "rmse_sod.pdf"), fig)
+    fig
+end
+
+# %%
+with_theme(merge(theme_minimal(), theme_latexfonts()), Axis=(xlabelsize=18,ylabelsize=18)) do
+    fix_pair = :sigma_x_filter => 0.025
+    scale_key = :Ne # The x axis scaling column
+    dodge_key = :delta_y # The categories/colors
+    value_key = :crps2
+    color_key = :algorithm
+    color_bank = Makie.wong_colors()
+
+    valid_rows = df_cut[!,first(fix_pair)] .== last(fix_pair)
+    df_short = df_cut[valid_rows, [scale_key, dodge_key, value_key, color_key]]
+    unique_positions = unique(df_short[!,scale_key])
+    x_position = map(u->findfirst(==(u), unique_positions), df_short[!,scale_key])
+    unique_color = unique(df_short[!,color_key])
+    unique_dodge = unique(df_short[!,dodge_key])
+    unique_cartesian = range(1,prod(length, (unique_color, unique_dodge)))
+    color = map(u->findfirst(==(u), unique_color), df_short[!,color_key])
+    simple_dodge = map(u->findfirst(==(u), unique_dodge), df_short[!,dodge_key])
+    dodge = (simple_dodge .- 1) * length(unique_color) + color
+    y_position = map(u->mean(get_inner_vector(u)), df_short[!,value_key])
+    fig = Figure(size=(800,400))
+    ax = Axis(
+        fig[1,1],
+        ygridvisible=true,
+        yminorgridvisible=true,
+        xlabel="Ensemble size",
+        ylabel=get_ylabel(value_key, false),
+        xticks=(eachindex(unique_positions), string.(unique_positions)),
+        xticklabelsize=18, yticklabelsize=18,
+        limits=(nothing, 4, nothing, nothing)
+    )
+    boxplot!(x_position, y_position, dodge = dodge, color = color_bank[color])
+    legend_entries = [
+        PolyElement(color = color_bank[j], strokewidth = 0)
+        for j in eachindex(unique_color)
+    ]
+    label_titles = Dict("locenkf"=> "EnKF", "hlocenkf"=>"GSBL-EnKF")
+    Legend(
+        fig[1,1], legend_entries, [label_titles[l] for l in unique_color],
+        tellheight=false, tellwidth=false, halign=0.025,
+        valign=:top, labelsize=18
+    )
+    # Custom annotations
+    text!(
+        [(3.4, 0.21), (3.4, 0.255), (3.4, 0.315)],
+        text=[L"\mathbf{\Delta y=0.05}", L"\mathbf{\Delta y=0.10}", L"\mathbf{\Delta y=0.15}"],
+        fontsize=25)
     fig
 end

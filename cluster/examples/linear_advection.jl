@@ -99,7 +99,6 @@ using LinearMaps
 using JLD2
 using Dates
 using Random
-using JLD2
 using Trixi: entropy2cons
 make_figs && using CairoMakie
 @info "Loaded packages"

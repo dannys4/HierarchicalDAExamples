@@ -12,8 +12,11 @@ ARG USER_GID=$USER_UID
 RUN groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME
 
-ENV JULIA_VERSION=1.11.5 \
-    JULIA_INSTALLER=https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-1.11.5-linux-x86_64.tar.gz \
+ENV JULIA_MAJOR=1.10 \
+    JULIA_MINOR=11
+
+ENV JULIA_VERSION=${JULIA_MAJOR}.${JULIA_MINOR}
+ENV JULIA_INSTALLER=https://julialang-s3.julialang.org/bin/linux/x64/$JULIA_MAJOR/julia-$JULIA_VERSION-linux-x86_64.tar.gz \
     JULIA_BASE_DIR=/home/${USERNAME}
 
 RUN apt-get update && apt-get install -y \
@@ -32,7 +35,7 @@ RUN wget --quiet ${JULIA_INSTALLER} -O /tmp/julia.tar.gz && \
 
 ENV PATH=${JULIA_BASE_DIR}/julia/bin:$PATH
 
-COPY --chown=${USER_UID}:${USER_GID} --chmod=777 ./Project.toml /home/${USERNAME}/.julia/environments/v1.11/
+COPY --chown=${USER_UID}:${USER_GID} --chmod=777 ./Project.toml /home/${USERNAME}/.julia/environments/v${JULIA_MAJOR}/
 COPY --chown=${USER_UID}:${USER_GID} --chmod=777 ./examples/test.jl /home/${USERNAME}
 
 RUN echo 'export PATH=${JULIA_BASE_DIR}/julia/bin:$PATH' >> /home/${USERNAME}/.bashrc && \
