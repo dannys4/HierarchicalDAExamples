@@ -185,6 +185,10 @@ make_figs && with_theme(my_theme) do
     fig
 end
 
+# Create Localization structure
+metric = PeriodicMetric(-1, 1)
+Loc = Localization(xgrid, Lrad, metric, is_sparse=true)
+
 # %%
 Cϵ = LinearMap(get_cov(ϵy, 0.))
 # This CX is replaced with the estimated state cov at each step
@@ -194,10 +198,6 @@ sys_y = ObsSystem(H, Cϵ);
 # %%
 yidx = 1:delta_y:Nx
 idx = vcat(collect(1:length(yidx))', collect(yidx)')
-
-# Create Localization structure
-metric = PeriodicMetric(-1, 1)
-Loc = Localization(xgrid, Lrad, metric, is_sparse=true)
 
 # beta_infl, sigma_x_filter = 1.04, 0.1
 ϵxbeta_filter = MultiAddInflation(Nx, beta_infl, zeros(Nx), sigma_x_filter)

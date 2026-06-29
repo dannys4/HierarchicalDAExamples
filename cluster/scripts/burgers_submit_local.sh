@@ -10,7 +10,6 @@
 
 # Pathing for commands
 ## local pathing
-export IN_DATA_PATH=$HOME/orcd/pool/HDA/burgers
 export PROJ_PATH=$PWD
 export RUN_CMD=./cluster/scripts/run_example
 
