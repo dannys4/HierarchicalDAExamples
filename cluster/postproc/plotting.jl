@@ -22,7 +22,7 @@ using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie
 
 # %%
 data_path = joinpath(@__DIR__, "data")
-example_name = "advection_data"
+example_name = "burgers_data"
 filename = example_name * "_df.jld2"
 
 # %%
@@ -280,8 +280,9 @@ with_theme(merge(theme_minimal(),theme_latexfonts()), Axis=(
     fig
 end
 
-# %%
+# %% For Advection
 with_theme(merge(theme_minimal(), theme_latexfonts()), Axis=(xlabelsize=18,ylabelsize=18)) do
+    WHICH_EXAMPLE = "advection"
     fix_pair = :sigma_x_filter => 0.025
     scale_key = :Ne # The x axis scaling column
     dodge_key = :delta_y # The categories/colors
@@ -325,7 +326,81 @@ with_theme(merge(theme_minimal(), theme_latexfonts()), Axis=(xlabelsize=18,ylabe
     # Custom annotations
     text!(
         [(3.4, 0.21), (3.4, 0.255), (3.4, 0.315)],
-        text=[L"\mathbf{\Delta y=0.05}", L"\mathbf{\Delta y=0.10}", L"\mathbf{\Delta y=0.15}"],
+        text=[L"\mathbf{\Delta y\approx 0.13}", L"\mathbf{\Delta y\approx0.26}", L"\mathbf{\Delta y\approx0.53}"],
         fontsize=25)
+    save(joinpath(@__DIR__, "figs", WHICH_EXAMPLE*"_error.pdf"), fig)
     fig
+end
+
+
+# %% For Burgers
+with_theme(merge(theme_minimal(), theme_latexfonts()), Axis=(xlabelsize=18,ylabelsize=18)) do
+    WHICH_EXAMPLE = "burgers"
+    fix_pair = :sigma_y => 0.1
+    scale_key = :Ne # The x axis scaling column
+    dodge_key = :delta_y # The categories/colors
+    value_key = :crps2
+    color_key = :algorithm
+    color_bank = Makie.wong_colors()
+
+    valid_rows = df_cut[!,first(fix_pair)] .== last(fix_pair)
+    df_short = df_cut[valid_rows, [scale_key, dodge_key, value_key, color_key]]
+    unique_positions = unique(df_short[!,scale_key])
+    x_position = map(u->findfirst(==(u), unique_positions), df_short[!,scale_key])
+    unique_color = unique(df_short[!,color_key])
+    unique_dodge = unique(df_short[!,dodge_key])
+    unique_cartesian = range(1,prod(length, (unique_color, unique_dodge)))
+    color = map(u->findfirst(==(u), unique_color), df_short[!,color_key])
+    simple_dodge = map(u->findfirst(==(u), unique_dodge), df_short[!,dodge_key])
+    dodge = (simple_dodge .- 1) * length(unique_color) + color
+    y_position = map(u->mean(get_inner_vector(u)), df_short[!,value_key])
+    fig = Figure(size=(800,400))
+    ax = Axis(
+        fig[1,1],
+        ygridvisible=true,
+        yminorgridvisible=true,
+        xlabel="Ensemble size",
+        ylabel=get_ylabel(value_key, false),
+        xticks=(eachindex(unique_positions), string.(unique_positions)),
+        xticklabelsize=18, yticklabelsize=18,
+        limits=(nothing, 5.4, nothing, 0.33)
+    )
+    boxplot!(x_position, y_position, dodge = dodge, color = color_bank[color])
+    legend_entries = [
+        PolyElement(color = color_bank[j], strokewidth = 0)
+        for j in eachindex(unique_color)
+    ]
+    label_titles = Dict("locenkf"=> "EnKF", "hlocenkf"=>"GSBL-EnKF")
+    Legend(
+        fig[1,1], legend_entries, [label_titles[l] for l in unique_color],
+        tellheight=false, tellwidth=false, halign=0.025,
+        valign=:top, labelsize=18
+    )
+    # Custom annotations
+    text!(
+        [(4.45, 0.055), (4.45, 0.12), (4.45, 0.21)],
+        text=[L"\mathbf{\Delta y\approx 0.13}", L"\mathbf{\Delta y\approx0.26}", L"\mathbf{\Delta y\approx0.53}"],
+        fontsize=25)
+    save(joinpath(@__DIR__, "figs", WHICH_EXAMPLE*"_error.png"), fig)
+    save(joinpath(@__DIR__, "figs", WHICH_EXAMPLE*"_error.pdf"), fig)
+    fig
+end
+
+# %% Compare the "better" one
+begin
+    ensemble_sizes = Int[]
+    gsbl_improve_crps = Float64[]
+    gsbl_improve_rmse = Float64[]
+    for df_sim in groupby(df[df[!,:sigma_y] .== 0.1,:], :id)
+        Ne = first(df_sim[!,:Ne])
+        which_gsbl = findfirst(==("hlocenkf"), df_sim[!,:algorithm])
+        gsbl_row, enkf_row = df_sim[which_gsbl, :], df_sim[3 - which_gsbl, :]
+        gsbl_crps2, enkf_crps2 = [mean(get_inner_vector(row[:crps2])) for row in (gsbl_row, enkf_row)]
+        gsbl_rmse2, enkf_rmse2 = [mean(get_inner_vector(row[:rmse2])) for row in (gsbl_row, enkf_row)]
+        push!(ensemble_sizes, Ne)
+        push!(gsbl_improve_crps, Float64(gsbl_crps2 < enkf_crps2))
+        push!(gsbl_improve_rmse, Float64(gsbl_rmse2 < enkf_rmse2))
+    end
+    df_grouped = DataFrame(:Ne=> ensemble_sizes, :gsbl_improve_crps=>gsbl_improve_crps, :gsbl_improve_rmse=>gsbl_improve_rmse)
+    df_better = combine(groupby(df_grouped, :Ne), :gsbl_improve_crps=>mean, :gsbl_improve_rmse=>mean)
 end

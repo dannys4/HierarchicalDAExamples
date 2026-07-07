@@ -38,7 +38,7 @@ t0, tf = 0.0, 2.0 # Start and end time
 
 # %%
 # Important parameters for data assimilation
-Ne = 40 # Ensemble size
+Ne = 50 # Ensemble size
 Lrad = 0.6 * delta_t_obs # Localization radius
 sigma_x_filter = 0.05 # State noise
 beta_infl = 1.02 # Inflation param
@@ -97,7 +97,7 @@ using Random
 make_figs && using CairoMakie
 
 # %%
-make_figs && (my_theme = theme_minimal())
+make_figs && (my_theme = merge(theme_minimal(), theme_latexfonts()))
 make_figs || macro L_str(args...) end; # Define L_str in case we aren't loading CairoMakie
 make_figs || macro lift(args...) end; # Define L_str in case we aren't loading CairoMakie
 Random.seed!(random_seed);
@@ -257,7 +257,7 @@ X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, ϵxbeta_filter, hloce
 
 # %%
 make_figs && with_theme(my_theme) do
-    tsnap = 40
+    tsnap = 9 #length(X_hlocenkf) ÷ 7
     t_val = data.tt[tsnap]
     x_tsnap = data_plot[:, tsnap]
     y_tsnap = data.yt[:, tsnap]
@@ -292,10 +292,10 @@ make_figs && with_theme(my_theme) do
     lines!(ax_enkf, x_plot, X_locenkf_tsnap, linewidth=3, label="Filter", color=cols[7], linestyle=:dot)
     scatter!(ax_enkf, xgrid[1:delta_y:end], y_tsnap, label="Observation", color=:black)
     axislegend(ax_enkf, orientation=:horizontal, position=(1.0, 1.2))
-    Label(fig[0,1], "Time $t_val", tellwidth=false)
+    # Label(fig[0,1], "Time $t_val", tellwidth=false)
     display(fig)
-    # save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.png"), fig)
-    # save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.png"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "profile_comparison.pdf"), fig)
 end
 
 # %%
@@ -415,7 +415,7 @@ end;
 
 # %%
 make_figs && with_theme(my_theme) do
-    tsnap = 5#length(X_locenkf) - 1
+    tsnap = length(X_locenkf) - 1
     x_tsnap = data.xt[:, tsnap]
     X_locenkf_tsnap = vec(mean(X_locenkf[tsnap+1]; dims=2))
     X_ens_tsnap = [X_locenkf[tsnap+1][:, j] for j in 1:Ne]
@@ -510,38 +510,41 @@ make_figs && with_theme(my_theme) do
 end
 
 # # %%
-# make_figs && with_theme(my_theme) do
-#     mean_locenkf = mean_hist(X_locenkf)[:, 1:end-1]
-#     mean_hlocenkf = mean_hist(X_hlocenkf)[:, 1:end-1]
-#     _, mean_locenkf = get_plot_ensemble(mean_locenkf, sys_burgers)
-#     _, mean_hlocenkf = get_plot_ensemble(mean_hlocenkf, sys_burgers)
-#     mean_locenkf = mean_locenkf[:, 1, :]
-#     mean_hlocenkf = mean_hlocenkf[:, 1, :]
-#     heatmap_locenkf = interp_columns(mean_locenkf, N_interp)
-#     heatmap_hlocenkf = interp_columns(mean_hlocenkf, N_interp)
-#     colorrange = extrema(reduce(vcat, collect(extrema(x)) for x in [heatmap_data, heatmap_locenkf, heatmap_hlocenkf]))
-#     fig = Figure(fontsize=20, size=(1200, 400))
-#     ax1 = Axis(fig[1, 1],
-#         title=L"\text{Truth}",
-#         xlabel=L"t",
-#         ylabel=L"x",)
-#     ax2 = Axis(fig[1, 2],
-#         title=L"\text{EnKF}",
-#         xlabel=L"t",
-#         ylabel=L"x",)
-#     ax3 = Axis(fig[1, 3],
-#         title=L"\text{GSBL EnKF}",
-#         xlabel=L"t",
-#         ylabel=L"x",)
-#     tgrid_plot = range(t0, tf, length=size(heatmap_data, 1))
-#     h1 = heatmap!(ax1, tgrid_plot, x_plot, heatmap_data; colorrange)
-#     heatmap!(ax2, tgrid_plot, x_plot, heatmap_locenkf; colorrange)
-#     heatmap!(ax3, tgrid_plot, x_plot, heatmap_hlocenkf; colorrange)
-#     Colorbar(fig[1, 4], label=L"u(x, t)"; colorrange)
-#     display(fig)
-#     save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.pdf"), fig)
-#     save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.png"), fig)
-# end
+make_figs && with_theme(my_theme) do
+    mean_locenkf = mean_hist(X_locenkf)[:, 1:end-1]
+    mean_hlocenkf = mean_hist(X_hlocenkf)[:, 1:end-1]
+    _, mean_locenkf = get_plot_ensemble(mean_locenkf, sys_burgers)
+    _, mean_hlocenkf = get_plot_ensemble(mean_hlocenkf, sys_burgers)
+    mean_locenkf = mean_locenkf[:, 1, :]
+    mean_hlocenkf = mean_hlocenkf[:, 1, :]
+    N_interp = 3
+    heatmap_data = interp_columns(data_plot, N_interp)
+    heatmap_locenkf = interp_columns(mean_locenkf, N_interp)
+    heatmap_hlocenkf = interp_columns(mean_hlocenkf, N_interp)
+    tt = reduce(vcat, collect(extrema(x)) for x in [heatmap_data, heatmap_locenkf, heatmap_hlocenkf])
+    colorrange = extrema(tt)
+    fig = Figure(fontsize=20, size=(1200, 400))
+    ax1 = Axis(fig[1, 1],
+        title=L"\text{Truth}",
+        xlabel=L"t",
+        ylabel=L"x",)
+    ax2 = Axis(fig[1, 2],
+        title=L"\text{EnKF}",
+        xlabel=L"t",
+        ylabel=L"x",)
+    ax3 = Axis(fig[1, 3],
+        title=L"\text{GSBL EnKF}",
+        xlabel=L"t",
+        ylabel=L"x",)
+    tgrid_plot = range(t0, tf, length=size(heatmap_data, 1))
+    h1 = heatmap!(ax1, tgrid_plot, x_plot, heatmap_data; colorrange)
+    heatmap!(ax2, tgrid_plot, x_plot, heatmap_locenkf; colorrange)
+    heatmap!(ax3, tgrid_plot, x_plot, heatmap_hlocenkf; colorrange)
+    Colorbar(fig[1, 4], label=L"u(x, t)"; colorrange)
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "heatmap_data.png"), fig)
+end
 
 # %%
 make_figs && with_theme(my_theme) do

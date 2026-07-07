@@ -104,7 +104,7 @@ make_figs && using CairoMakie
 @info "Loaded packages"
 
 # %%
-make_figs && (my_theme = theme_minimal())
+make_figs && (my_theme = merge(theme_minimal(), theme_latexfonts()))
 make_figs || macro L_str(args...) end; # Define L_str in case we aren't loading CairoMakie
 make_figs || macro lift(args...) end; # Define L_str in case we aren't loading CairoMakie
 Random.seed!(random_seed);
@@ -209,6 +209,23 @@ for i = 1:Ne
     regenerate!(f0)
     X0[:, i] = 0.5 * (f0.(xgrid) .+ 1.)
 end
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure()
+    ax = Axis(fig[1, 1], xlabel=L"x")
+    _, initial_ens = get_plot_ensemble(X0, sys_advection)
+    for (idx,ens_j) in enumerate(eachcol(initial_ens[:,1,:]))
+        idx > 15 && break
+        lines!(ax, x_plot, ens_j, linewidth=0.6, alpha=0.8)
+    end
+    lines!(ax, xgrid, data.x0,color = :black, label=L"u(0,x)", linewidth=4, linestyle=:dash)
+    axislegend()
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "initial_condition.png"), fig)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "initial_condition.pdf"), fig)
+end
+
 
 # %%
 # Create Localization structure
@@ -539,3 +556,43 @@ make_figs && with_theme(my_theme) do
     anim
 end
 
+
+# # %%
+make_figs && with_theme(my_theme) do
+    mean_locenkf = mean_hist(X_locenkf)[:, 1:end-1]
+    mean_hlocenkf = mean_hist(X_hlocenkf)[:, 1:end-1]
+    _, mean_locenkf = get_plot_ensemble(mean_locenkf, sys_advection)
+    _, mean_hlocenkf = get_plot_ensemble(mean_hlocenkf, sys_advection)
+    mean_locenkf = mean_locenkf[:, 1, :]
+    mean_hlocenkf = mean_hlocenkf[:, 1, :]
+    start_idx, N_interp = 1, 2
+    heatmap_data = interp_columns(data_plot[:,start_idx:end], N_interp)
+    heatmap_locenkf = interp_columns(mean_locenkf[:,start_idx:end], N_interp)
+    heatmap_hlocenkf = interp_columns(mean_hlocenkf[:,start_idx:end], N_interp)
+    @info "" size(heatmap_data)
+    tt = reduce(vcat, collect(extrema(x)) for x in [heatmap_data, heatmap_locenkf, heatmap_hlocenkf])
+    colorrange = extrema(tt)
+    fig = Figure(fontsize=20, size=(1200, 400))
+    ax1 = Axis(fig[1, 1],
+        title=L"\text{Truth}",
+        xlabel=L"t",
+        ylabel=L"x",)
+    ax2 = Axis(fig[1, 2],
+        title=L"\text{EnKF}",
+        xlabel=L"t",
+        # ylabel=L"x",
+        )
+    ax3 = Axis(fig[1, 3],
+        title=L"\text{GSBL EnKF}",
+        xlabel=L"t",
+        # ylabel=L"x",
+        )
+    tgrid_plot = range(t0, tf, length=size(heatmap_data, 1))
+    h1 = heatmap!(ax1, tgrid_plot, x_plot, heatmap_data; colorrange)
+    heatmap!(ax2, tgrid_plot, x_plot, heatmap_locenkf; colorrange)
+    heatmap!(ax3, tgrid_plot, x_plot, heatmap_hlocenkf; colorrange)
+    Colorbar(fig[1, 4], label=L"u(x, t)"; colorrange)
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "heatmap_data.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "linear_advection", "heatmap_data.png"), fig)
+end

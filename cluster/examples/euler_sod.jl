@@ -40,7 +40,7 @@ delta_t_obs = 0.025
 t0 = 0.0
 tf = 0.2
 
-delta_y = 10
+delta_y = 30
 density_thresh, pressure_thresh = 5e-5, 5e-5
 sigma_y = 0.05
 sigma_x_data = 0.0
@@ -56,7 +56,7 @@ sigma_x_filter = 0.0
 beta_infl = 1.02
 wave_speed = 13.912
 Lrad = 0.1 # wave_speed * delta_t_obs
-Ne = 40
+Ne = 25
 cfl = 0.4
 
 # %% [markdown]
@@ -112,7 +112,7 @@ using Random
 make_figs && using CairoMakie
 
 # %%
-make_figs && (my_theme = theme_minimal())
+make_figs && (my_theme = merge(theme_minimal(), theme_latexfonts()))
 make_figs || macro L_str(args...) end; # Define L_str in case we aren't loading CairoMakie
 make_figs || macro lift(args...) end; # Define L_str in case we aren't loading CairoMakie
 Random.seed!(random_seed);
@@ -387,12 +387,14 @@ elseif which_initial == :random_shock
     end
 end
 
-make_figs && with_theme(my_theme) do
+make_figs && with_theme(my_theme, fontsize=20) do
     _, X0_plot = get_plot_ensemble(X0, sys_euler)
-    fig = Figure(size=(2100, 500))
+    fig = Figure(size=(1500, 325))
+    true_vnames = [L"\log\ \rho", L"v", L"\log\ p"]
     axs = map(1:Nvar) do i
         Axis(fig[1, i],
-            title=Trixi.varnames(cons2prim, equations)[i],
+            title=true_vnames[i],
+            xlabel=L"x"
             # limits=(nothing, nothing, -0.05, 1.25),
             # yticks=0.:0.4:1.2
         )
@@ -405,11 +407,11 @@ make_figs && with_theme(my_theme) do
         col = cols[mod1(ens_idx, length(cols))]
         for (var_idx, idx_y) in enumerate([idxρy_xgrid, idxvy_xgrid, idxpy_xgrid])
             lines!(axs[var_idx], xgrid, X_sample[var_idx, :], linewidth=5, color=(col, 0.2))
-            # lines!(axi, xgrid, X_sample[idx_x, div(end, 3)], linewidth=3)
         end
     end
-    save(joinpath(@__DIR__, "figs", "euler", "initial_ensemble.pdf"), fig)
     display(fig)
+    save(joinpath(@__DIR__, "figs", "euler", "initial_ensemble.png"), fig)
+    save(joinpath(@__DIR__, "figs", "euler", "initial_ensemble.pdf"), fig)
 end;
 
 # %%
@@ -470,7 +472,7 @@ end
 sqrt_quad_wts = kron(sqrt.(vec(sys_euler.mesh.md.wJq)), ones(Nvar))
 diff_map = DGMultiDiff1D(sys_euler, false)
 grid_sz = sys_euler.mesh.md.J[1]
-diff_mat = Diagonal(sqrt_quad_wts) * sparse(diff_map * (I + diff_map * (I + diff_map)))/3
+diff_mat = Diagonal(sqrt_quad_wts) * sparse(diff_map * diff_map)
 # diff_mat = sparse(diff_map * diff_map)
 edge_cutoff = 0
 # S_out_idx = (Nvar * (edge_cutoff+1)):(Nvar * ((size(diff_mat, 1) ÷ Nvar) - edge_cutoff))
@@ -519,7 +521,7 @@ r_GSBL = 0.5
 ϑ_GSBL = 1e-3
 dist = GeneralizedGamma(r_GSBL, β_GSBL, ϑ_GSBL);
 
-make_figs && with_theme(my_theme) do
+false && make_figs && with_theme(my_theme) do
     R = r_GSBL
     VARTHETA = ϑ_GSBL
     fig = Figure()
@@ -555,7 +557,7 @@ hlocenkf = HLocEnKF(identity, Ne, ϵy, sys_ys, Loc_gsbl, dist, theta_init_space,
 # %%
 local X_hlocenkf, θ_hlocenkf
 @info "Performing GSBL EnKF..."
-T_hlocenkf = 3
+T_hlocenkf = Tf
 start_hlocenkf = time()
 X_hlocenkf, θ_hlocenkf = seqassim_trixi(data, T_hlocenkf, filter_inflation, hlocenkf, copy(X0), model.Ny, model.Nx, t0, sys_euler; ode_solver, cfl, ode_transforms)
 hloc_elaps = time() - start_hlocenkf
@@ -682,7 +684,7 @@ function derivative_rmse(diff_op, Nvar, quad_wts, truth, ens)
 end
 
 # %%
-start_time = 1
+start_time = 8
 for alg_name in ["locenkf", "hlocenkf"]
     # Error metrics
     metric_sym = Symbol("metrics_$alg_name")
@@ -710,8 +712,8 @@ for alg_name in ["locenkf", "hlocenkf"]
     metric_dict[:entropy] = entropy_alg
     metric_dict[:tv_norm] = tv_alg
 end
-# @info "" tuple(metrics_hlocenkf[:crps2_hlocenkf]) tuple(metrics_hlocenkf[:rmse2_hlocenkf]) tuple(metrics_locenkf[:crps2_locenkf]) tuple(metrics_locenkf[:rmse2_locenkf])
-# @info "" tuple(metrics_hlocenkf[:crps2_hlocenkf] ./ metrics_locenkf[:crps2_locenkf])
+@info "" tuple(metrics_hlocenkf[:crps2_hlocenkf]) tuple(metrics_hlocenkf[:rmse2_hlocenkf]) tuple(metrics_locenkf[:crps2_locenkf]) tuple(metrics_locenkf[:rmse2_locenkf])
+@info "" tuple(metrics_hlocenkf[:crps2_hlocenkf] ./ metrics_locenkf[:crps2_locenkf])
 # entropy_hlocenkf, entropy_locenkf = map(x->x[end],), map(x->x[end],metrics_locenkf[:entropy])
 # @info "" sum(abs2, reduce(hcat, metrics_hlocenkf[:entropy][2:end])' .- entropy_data)
 # @info "" sum(abs2, reduce(hcat,  metrics_locenkf[:entropy][2:end])' .- entropy_data)
@@ -897,4 +899,41 @@ make_figs && with_theme(my_theme) do
     axislegend(ax2)
     display(fig)
     save(joinpath(@__DIR__, "figs", "euler", "entropy.pdf"), fig)
+end
+
+# %%
+make_figs && with_theme(my_theme, Axis=(;titlesize=20, xlabelsize=20), linewidth=4) do
+    postproc_locenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_locenkf)
+    postproc_hlocenkf = map(x -> get_plot_ensemble(x, sys_euler)[2], X_hlocenkf)
+    fig = Figure(size=(1010, 600))
+    colors = Makie.wong_colors()
+    true_data = similar(x_plot, Nvar*length(x_plot))
+    sort!(x_plot)
+    sod_solution!(true_data, x_plot, data.tt[end], SodShock())
+    true_data = reshape(true_data, Nvar, length(x_plot))'
+    for (row, alg_data, alg_name) in zip(1:2, [postproc_locenkf, postproc_hlocenkf], ["EnKF", "GSBL-EnKF"])
+        for (state_idx, state_name) in enumerate([L"\log\ \rho", L"v", L"\log\ p"])
+            state_data = true_data[:, state_idx]
+            if state_idx != 2
+                state_data .= log.(state_data)
+            end
+            alg_data_ens = alg_data[end][:, state_idx, :]
+            ens_mean = vec(mean(alg_data_ens, dims=2))
+            ax = Axis(fig[row, state_idx], title=ifelse(row == 1, state_name, ""), xlabel=ifelse(row == 1, "", L"x"))
+            lines!(x_plot, state_data)
+            for ens_member in eachcol(alg_data_ens)
+                if any(abs.(ens_member - ens_mean) .> 0.5)
+                    continue
+                end
+                lines!(x_plot, ens_member, linewidth=0.8, alpha=0.8)
+            end
+            lines!(x_plot, ens_mean, color=colors[2], alpha=0.7, linestyle=:dash)
+            if state_idx == 3
+                text!([(0.95, -0.1)], text=[alg_name], fontsize=20, font=:bold, align=(:right,:bottom))
+            end
+        end
+    end
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "euler", "profiles.pdf"), fig)
+    save(joinpath(@__DIR__, "figs", "euler", "profiles.png"), fig)
 end
