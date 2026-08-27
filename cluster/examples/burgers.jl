@@ -179,6 +179,22 @@ end
 # %%
 make_figs && with_theme(my_theme) do
     fig = Figure()
+    ax = Axis(fig[1, 1], xlabel=L"x")
+    _, initial_ens = get_plot_ensemble(X, sys_burgers)
+    for (idx,ens_j) in enumerate(eachcol(initial_ens[:,1,:]))
+        idx > 15 && break
+        lines!(ax, x_plot, ens_j, linewidth=0.6, alpha=0.8)
+    end
+    lines!(ax, xgrid, data.x0,color = :black, label=L"u(0,x)", linewidth=4, linestyle=:dash)
+    axislegend()
+    display(fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "initial_condition.png"), fig)
+    save(joinpath(@__DIR__, "figs", "burgers", "initial_condition.pdf"), fig)
+end
+
+# %%
+make_figs && with_theme(my_theme) do
+    fig = Figure()
     ax = Axis(fig[1, 1])
     foreach(i -> lines!(ax, xgrid, X[:, i]), 1:10)
     lines!(ax, xgrid, x0, linewidth=10)
@@ -461,7 +477,7 @@ make_figs && with_theme(my_theme) do
     lines!(ax1, xgrid, ys, linewidth=3, label="State")
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.2))
-        lines!(ax1, xgrid, theta_tsnap[j], linewidth=3)
+        # lines!(ax1, xgrid, theta_tsnap[j], linewidth=3)
     end
     scatter!(ax1, xgrid[1:delta_y:end], y_tsnap)
 

@@ -22,7 +22,7 @@ using DataFrames, JLD2, Distributions, ProgressMeter, CairoMakie
 
 # %%
 data_path = joinpath(@__DIR__, "data")
-example_name = "burgers_data"
+example_name = "sod_618"
 filename = example_name * "_df.jld2"
 
 # %%
@@ -235,51 +235,6 @@ begin
     end
 end
 
-# %%
-with_theme(merge(theme_minimal(),theme_latexfonts()), Axis=(
-    xlabel="Ensemble Size, log-scale", xscale = log10,
-    xticks=[25, 38, 56, 84, 127]
-)) do
-    df = df_cut
-    group_col = :algorithm
-    x_col = :Ne
-    y_col = :rmse2
-    groups = unique(df[!,group_col])
-    n_group = length(groups)
-    abscessa_vals = Int.(sort(unique(df[!,x_col])))
-    GROUP_INC = 0.15
-    JITTER = 0.01
-    alg_names = Dict(["locenkf" => "EnKF", "hlocenkf" => "GSBL-EnKF"])
-    alg_markers = Dict(["locenkf" => :circle, "hlocenkf" => :+])
-    fig = Figure(size=(1000,300))
-    for state in 1:3
-        ax = Axis(fig[1,state], ylabel= state == 1 ? "RMSE" : "")
-        xlims!(ax, (20, 150))
-        for (j,gdf) in enumerate(groupby(df, group_col))
-            x_inc = 2*(j - ((n_group + 1)÷2))/n_group - 0.5
-            group_inc = GROUP_INC * gdf[!, x_col] * x_inc
-            jitter = JITTER * randn(length(gdf[!,x_col])) .* gdf[!, x_col]
-            x_jit = gdf[!,x_col] + jitter + group_inc
-            y = map(x->x[state], gdf[!,y_col])
-            alg = first(gdf[!,group_col])
-            scatter!(ax, x_jit, y, label=alg_names[alg], markersize=18, marker=alg_markers[alg], alpha=0.6)
-        end
-        for (j,gdf) in enumerate(groupby(df, group_col))
-            x_inc = 2*(j - ((n_group + 1)÷2))/n_group - 0.5
-            # group_inc = GROUP_INC * ab * x_inc
-            y = map(x->x[state], gdf[!,y_col])
-            med_error = [median(y[gdf[!,x_col] .== n]) for n in abscessa_vals]
-            alg = first(gdf[!,group_col])
-            scatterlines!(ax, abscessa_vals .* (1 .+ GROUP_INC * x_inc), med_error, linewidth=3, markersize=18, strokecolor=:black, strokewidth=3, marker=alg_markers[alg])
-        end
-        if state == 3
-            axislegend()
-        end
-    end
-    save(joinpath(@__DIR__, "figs", "rmse_sod.pdf"), fig)
-    fig
-end
-
 # %% For Advection
 with_theme(merge(theme_minimal(), theme_latexfonts()), Axis=(xlabelsize=18,ylabelsize=18)) do
     WHICH_EXAMPLE = "advection"
@@ -329,6 +284,61 @@ with_theme(merge(theme_minimal(), theme_latexfonts()), Axis=(xlabelsize=18,ylabe
         text=[L"\mathbf{\Delta y\approx 0.13}", L"\mathbf{\Delta y\approx0.26}", L"\mathbf{\Delta y\approx0.53}"],
         fontsize=25)
     save(joinpath(@__DIR__, "figs", WHICH_EXAMPLE*"_error.pdf"), fig)
+    fig
+end
+
+# %% Still Advection
+with_theme(merge(theme_minimal(), theme_latexfonts()), Axis=(xlabelsize=18,ylabelsize=18)) do
+    WHICH_EXAMPLE = "advection"
+    fix_pair = :sigma_x_filter => 0.025
+    scale_key = :Ne # The x axis scaling column
+    dodge_key = :delta_y # The categories/colors
+    value_key = :rmse2
+    color_key = :algorithm
+    color_bank = Makie.wong_colors()
+
+    valid_rows = df_cut[!,first(fix_pair)] .== last(fix_pair)
+    df_short = df_cut[valid_rows, [scale_key, dodge_key, value_key, color_key]]
+    unique_positions = unique(df_short[!,scale_key])
+    x_position = map(u->findfirst(==(u), unique_positions), df_short[!,scale_key])
+    unique_color = unique(df_short[!,color_key])
+    unique_dodge = unique(df_short[!,dodge_key])
+    unique_cartesian = range(1,prod(length, (unique_color, unique_dodge)))
+    color = map(u->findfirst(==(u), unique_color), df_short[!,color_key])
+    simple_dodge = map(u->findfirst(==(u), unique_dodge), df_short[!,dodge_key])
+    dodge = (simple_dodge .- 1) * length(unique_color) + color
+    y_position = map(u->mean(get_inner_vector(u)), df_short[!,value_key])
+    fig = Figure(size=(800,400))
+    ax = Axis(
+        fig[1,1],
+        ygridvisible=true,
+        yminorgridvisible=true,
+        xlabel="Ensemble size",
+        ylabel=get_ylabel(value_key, false),
+        xticks=(eachindex(unique_positions), string.(unique_positions)),
+        xticklabelsize=18, yticklabelsize=18,
+        limits=(nothing, 4.15, nothing, 0.61)
+    )
+    boxplot!(x_position, y_position, dodge = dodge, color = color_bank[color])
+    legend_entries = [
+        PolyElement(color = color_bank[j], strokewidth = 0)
+        for j in eachindex(unique_color)
+    ]
+    label_titles = Dict("locenkf"=> "EnKF", "hlocenkf"=>"GSBL-EnKF")
+    Legend(
+        fig[1,1], legend_entries, [label_titles[l] for l in unique_color],
+        tellheight=false, tellwidth=false, halign=0.025,
+        valign=:top, labelsize=18
+    )
+    # Custom annotations
+    text!(
+        [(3.45, 0.26), (3.45, 0.32), (3.45, 0.49)],
+        text=[L"\mathbf{\Delta y\approx 0.13}", L"\mathbf{\Delta y\approx0.26}", L"\mathbf{\Delta y\approx0.53}"],
+        fontsize=25
+    )
+    fname = "_$(value_key)_error"
+    save(joinpath(@__DIR__, "figs", WHICH_EXAMPLE*fname*".png"), fig)
+    save(joinpath(@__DIR__, "figs", WHICH_EXAMPLE*fname*".pdf"), fig)
     fig
 end
 
@@ -386,12 +396,70 @@ with_theme(merge(theme_minimal(), theme_latexfonts()), Axis=(xlabelsize=18,ylabe
     fig
 end
 
+# %% Still burgers
+with_theme(merge(theme_minimal(), theme_latexfonts()), Axis=(xlabelsize=18,ylabelsize=18)) do
+    WHICH_EXAMPLE = "burgers"
+    fix_pair = :sigma_y => 0.1
+    scale_key = :Ne # The x axis scaling column
+    dodge_key = :delta_y # The categories/colors
+    value_key = :rmse2
+    color_key = :algorithm
+    color_bank = Makie.wong_colors()
+
+    valid_rows = df_cut[!,first(fix_pair)] .== last(fix_pair)
+    df_short = df_cut[valid_rows, [scale_key, dodge_key, value_key, color_key]]
+    unique_positions = unique(df_short[!,scale_key])
+    x_position = map(u->findfirst(==(u), unique_positions), df_short[!,scale_key])
+    unique_color = unique(df_short[!,color_key])
+    unique_dodge = unique(df_short[!,dodge_key])
+    unique_cartesian = range(1,prod(length, (unique_color, unique_dodge)))
+    color = map(u->findfirst(==(u), unique_color), df_short[!,color_key])
+    simple_dodge = map(u->findfirst(==(u), unique_dodge), df_short[!,dodge_key])
+    dodge = (simple_dodge .- 1) * length(unique_color) + color
+    y_position = map(u->mean(get_inner_vector(u)), df_short[!,value_key])
+    fig = Figure(size=(800,400))
+    ax = Axis(
+        fig[1,1],
+        ygridvisible=true,
+        yminorgridvisible=true,
+        xlabel="Ensemble size",
+        ylabel=get_ylabel(value_key, false),
+        xticks=(eachindex(unique_positions), string.(unique_positions)),
+        xticklabelsize=18, yticklabelsize=18,
+        limits=(nothing, 5.4, nothing, 0.52)
+    )
+    boxplot!(x_position, y_position, dodge = dodge, color = color_bank[color])
+    legend_entries = [
+        PolyElement(color = color_bank[j], strokewidth = 0)
+        for j in eachindex(unique_color)
+    ]
+    label_titles = Dict("locenkf"=> "EnKF", "hlocenkf"=>"GSBL-EnKF")
+    Legend(
+        fig[1,1], legend_entries, [label_titles[l] for l in unique_color],
+        tellheight=false, tellwidth=false, halign=0.025,
+        valign=:top, labelsize=18
+    )
+    # Custom annotations
+    text!(
+        [(4.45, 0.10), (4.45, 0.19), (4.45, 0.35)],
+        text=[L"\mathbf{\Delta y\approx 0.13}", L"\mathbf{\Delta y\approx0.26}", L"\mathbf{\Delta y\approx0.53}"],
+        fontsize=25)
+    fname = "_$(value_key)_error"
+    save(joinpath(@__DIR__, "figs", WHICH_EXAMPLE*fname*".png"), fig)
+    save(joinpath(@__DIR__, "figs", WHICH_EXAMPLE*fname*".pdf"), fig)
+    fig
+end
+
 # %% Compare the "better" one
 begin
+    # burgers: sigma_y = 0.1
+    # advection: sigma_x_filter = 0.025
+    # sod: all
+    which_keep = Colon()
     ensemble_sizes = Int[]
     gsbl_improve_crps = Float64[]
     gsbl_improve_rmse = Float64[]
-    for df_sim in groupby(df[df[!,:sigma_y] .== 0.1,:], :id)
+    for df_sim in groupby(df[which_keep,:], :id)
         Ne = first(df_sim[!,:Ne])
         which_gsbl = findfirst(==("hlocenkf"), df_sim[!,:algorithm])
         gsbl_row, enkf_row = df_sim[which_gsbl, :], df_sim[3 - which_gsbl, :]
@@ -403,4 +471,101 @@ begin
     end
     df_grouped = DataFrame(:Ne=> ensemble_sizes, :gsbl_improve_crps=>gsbl_improve_crps, :gsbl_improve_rmse=>gsbl_improve_rmse)
     df_better = combine(groupby(df_grouped, :Ne), :gsbl_improve_crps=>mean, :gsbl_improve_rmse=>mean)
+end
+
+
+# %% Sod
+with_theme(merge(theme_minimal(),theme_latexfonts()), Axis=(
+    xlabel="Ensemble Size, log-scale", xscale = log10,
+    xticks=[25, 38, 56, 84, 127],
+    titlesize=20
+)) do
+    df = df_cut
+    group_col = :algorithm
+    x_col = :Ne
+    y_col = :rmse2
+    groups = unique(df[!,group_col])
+    n_group = length(groups)
+    abscessa_vals = Int.(sort(unique(df[!,x_col])))
+    GROUP_INC = 0.15
+    JITTER = 0.01
+    alg_names = Dict(["locenkf" => "EnKF", "hlocenkf" => "GSBL-EnKF"])
+    alg_markers = Dict(["locenkf" => :circle, "hlocenkf" => :+])
+    fig = Figure(size=(1000,300))
+    state_names = [L"\log\,\rho", L"v", L"\log\,p"]
+    for (state, state_name) in enumerate(state_names)
+        ax = Axis(fig[1,state], title=state_name, ylabel= state == 1 ? "RMSE" : "")
+        xlims!(ax, (20, 150))
+        for (j,gdf) in enumerate(groupby(df, group_col))
+            x_inc = 2*(j - ((n_group + 1)÷2))/n_group - 0.5
+            group_inc = GROUP_INC * gdf[!, x_col] * x_inc
+            jitter = JITTER * randn(length(gdf[!,x_col])) .* gdf[!, x_col]
+            x_jit = gdf[!,x_col] + jitter + group_inc
+            y = map(x->x[state], gdf[!,y_col])
+            alg = first(gdf[!,group_col])
+            scatter!(ax, x_jit, y, label=alg_names[alg], markersize=18, marker=alg_markers[alg], alpha=0.6)
+        end
+        for (j,gdf) in enumerate(groupby(df, group_col))
+            x_inc = 2*(j - ((n_group + 1)÷2))/n_group - 0.5
+            # group_inc = GROUP_INC * ab * x_inc
+            y = map(x->x[state], gdf[!,y_col])
+            med_error = [median(y[gdf[!,x_col] .== n]) for n in abscessa_vals]
+            alg = first(gdf[!,group_col])
+            scatter!(ax, abscessa_vals .* (1 .+ GROUP_INC * x_inc), med_error, markersize=18, strokecolor=:black, strokewidth=3, marker=alg_markers[alg])
+        end
+        if state == 3
+            axislegend()
+        end
+    end
+    save(joinpath(@__DIR__, "figs", "rmse_sod.png"), fig)
+    save(joinpath(@__DIR__, "figs", "rmse_sod.pdf"), fig)
+    fig
+end
+
+# %% Sod continued
+with_theme(merge(theme_minimal(),theme_latexfonts()), Axis=(
+    xlabel="Ensemble Size, log-scale", xscale = log10,
+    xticks=[25, 38, 56, 84, 127],
+    titlesize=20
+)) do
+    df = df_cut
+    group_col = :algorithm
+    x_col = :Ne
+    y_col = :crps2
+    groups = unique(df[!,group_col])
+    n_group = length(groups)
+    abscessa_vals = Int.(sort(unique(df[!,x_col])))
+    GROUP_INC = 0.15
+    JITTER = 0.01
+    alg_names = Dict(["locenkf" => "EnKF", "hlocenkf" => "GSBL-EnKF"])
+    alg_markers = Dict(["locenkf" => :circle, "hlocenkf" => :+])
+    fig = Figure(size=(1000,300))
+    state_names = [L"\log\,\rho", L"v", L"\log\,p"]
+    for (state, state_name) in enumerate(state_names)
+        ax = Axis(fig[1,state], title=state_name, ylabel= state == 1 ? "CRPS" : "")
+        xlims!(ax, (20, 150))
+        for (j,gdf) in enumerate(groupby(df, group_col))
+            x_inc = 2*(j - ((n_group + 1)÷2))/n_group - 0.5
+            group_inc = GROUP_INC * gdf[!, x_col] * x_inc
+            jitter = JITTER * randn(length(gdf[!,x_col])) .* gdf[!, x_col]
+            x_jit = gdf[!,x_col] + jitter + group_inc
+            y = map(x->x[state], gdf[!,y_col])
+            alg = first(gdf[!,group_col])
+            scatter!(ax, x_jit, y, label=alg_names[alg], markersize=18, marker=alg_markers[alg], alpha=0.6)
+        end
+        for (j,gdf) in enumerate(groupby(df, group_col))
+            x_inc = 2*(j - ((n_group + 1)÷2))/n_group - 0.5
+            # group_inc = GROUP_INC * ab * x_inc
+            y = map(x->x[state], gdf[!,y_col])
+            med_error = [median(y[gdf[!,x_col] .== n]) for n in abscessa_vals]
+            alg = first(gdf[!,group_col])
+            scatter!(ax, abscessa_vals .* (1 .+ GROUP_INC * x_inc), med_error, markersize=18, strokecolor=:black, strokewidth=3, marker=alg_markers[alg])
+        end
+        if state == 3
+            axislegend()
+        end
+    end
+    save(joinpath(@__DIR__, "figs", "crps_sod.png"), fig)
+    save(joinpath(@__DIR__, "figs", "crps_sod.pdf"), fig)
+    fig
 end

@@ -233,11 +233,21 @@ end;
 
 x_plot, data_plot = get_plot_ensemble(data.xt, sys_euler; use_cons=false, ode_transforms)
 
-(false && make_figs) && with_theme(my_theme) do
+function remove_jumps(v::AbstractVector)
+    v_diff = diff(v)
+    jump_idx = findall(abs.(v_diff) .> 0.025 * maximum(abs.(v_diff)))
+    v_clean = copy(v)
+    for idx in jump_idx
+        v_clean[idx+1] = (v_clean[idx]+v_clean[idx+2])/2
+    end
+    return v_clean
+end
+
+make_figs && with_theme(my_theme) do
     N_T = length(data.tt)
-    p_t = t -> data_plot[:, 1, t]
-    ρ_t = t -> data_plot[:, 2, t]
-    v_t = t -> data_plot[:, 3, t]
+    p_t = t -> remove_jumps(data_plot[:, 1, t])
+    ρ_t = t -> remove_jumps(data_plot[:, 2, t])
+    v_t = t -> remove_jumps(data_plot[:, 3, t])
 
     time = Observable(1)
     ps = @lift(p_t($time))
@@ -246,9 +256,9 @@ x_plot, data_plot = get_plot_ensemble(data.xt, sys_euler; use_cons=false, ode_tr
 
     fig = Figure()
     title_times = round.(data.tt, digits=2)
-    ax = Axis(fig[1, 1], xlabel=L"x", ylabel=L"u(t,x)", title=@lift("Shu-Osher, t = $(title_times[$time])"))
-    lines!(x_plot, ρs, label=L"\rho", linewidth=3)
-    lines!(x_plot, ps, label=L"p", linewidth=3)
+    ax = Axis(fig[1, 1], xlabel=L"x", ylabel=L"u(t,x)", title=@lift("Sod shocktube, t = $(title_times[$time])"))
+    lines!(x_plot, ρs, label=L"\log \rho", linewidth=3)
+    lines!(x_plot, ps, label=L"\log p", linewidth=3)
     lines!(x_plot, vs, label=L"v", linewidth=3)
     axislegend()
     timestamps = 1:N_T

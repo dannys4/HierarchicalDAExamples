@@ -505,7 +505,7 @@ make_figs && with_theme(my_theme) do
     y_tsnap = @lift(data.yt[:, $tsnap])
     X_hlocenkf_tsnap = @lift(vec(mean(X_hlocenkf[$tsnap+1]; dims=2)))
     X_ens_tsnap = [@lift(X_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
-    theta_tsnap = [@lift(θ_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
+    # theta_tsnap = [@lift(θ_hlocenkf[$tsnap+1][:, j]) for j in 1:Ne]
     fig = Figure()
     ax1 = Axis(fig[1, 1], title="Hierarchical Localized EnKF")
 
@@ -513,7 +513,7 @@ make_figs && with_theme(my_theme) do
     lines!(ax1, xgrid, x_tsnap, linewidth=3, label="Truth")
     for j in 1:Ne
         lines!(ax1, xgrid, X_ens_tsnap[j], linewidth=0.9, color=(cols[1+(j%length(cols))], 0.3))
-        scatter!(ax1, xgrid_S, theta_tsnap[j])
+        # scatter!(ax1, xgrid_S, theta_tsnap[j])
     end
     scatter!(ax1, xgrid[obs_indices], y_tsnap)
     axislegend(ax1)
